@@ -88,6 +88,7 @@ type RigaCarrello = {
   extra: string[];
   note: string;
   quantita: number;
+  ingredientiRimossi?: string[];
 };
 
 type PaymentMethod =
@@ -102,7 +103,7 @@ type PaymentMethod =
   | "paypal_demo";
 
 type PaymentStatus = "da pagare" | "pagato";
-type OrderSource = "app" | "telefono";
+type OrderSource = "app" | "telefono" | "admin";
 type CustomerSource = "app" | "telefono";
 
 type Ordine = {
@@ -129,6 +130,8 @@ type Ordine = {
   telefonoCliente?: string;
   noteRider?: string;
   source: OrderSource;
+  printed: boolean;
+  printedAt?: string;
 };
 
 type Cliente = {
@@ -234,6 +237,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     needsPos: true,
     telefonoCliente: "333 1002001",
     source: "app",
+    printed: false,
   },
   {
     id: "PF-2042",
@@ -258,6 +262,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     telefonoCliente: "333 1002003",
     noteRider: "Suonare una volta sola",
     source: "app",
+    printed: false,
   },
   {
     id: "PF-2043",
@@ -277,6 +282,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     needsPos: false,
     telefonoCliente: "333 1002002",
     source: "app",
+    printed: false,
   },
   {
     id: "PF-2044",
@@ -301,6 +307,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     telefonoCliente: "333 1002004",
     noteRider: "Consegna reception piano terra",
     source: "app",
+    printed: false,
   },
   {
     id: "PF-2045",
@@ -320,6 +327,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     needsPos: false,
     telefonoCliente: "333 1002001",
     source: "app",
+    printed: false,
   },
   {
     id: "PF-2046",
@@ -344,6 +352,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     telefonoCliente: "333 1002003",
     noteRider: "",
     source: "app",
+    printed: false,
   },
 ];
 
@@ -718,6 +727,7 @@ export default function Home() {
     noteConsegna: "",
   });
   const [adminFiltro, setAdminFiltro] = useState<AdminFiltro>("tutti");
+  const [adminPrintFilter, setAdminPrintFilter] = useState<"tutti" | "da-stampare" | "stampati">("tutti");
   const [showProfileAddressForm, setShowProfileAddressForm] = useState(false);
   const [profileAddressDraft, setProfileAddressDraft] = useState<IndirizzoSalvato>({
     id: "profile-new",
@@ -763,6 +773,8 @@ export default function Home() {
   const [manualCopied, setManualCopied] = useState("");
   const [crmPromoNotice, setCrmPromoNotice] = useState("");
   const [marketingMessageNotice, setMarketingMessageNotice] = useState("");
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const [printPreviewOrders, setPrintPreviewOrders] = useState<Ordine[]>([]);
 
   const totaleCarrello = useMemo(
     () =>
@@ -865,6 +877,19 @@ export default function Home() {
     if (adminFiltro === "tutti") return ordiniOggi;
     return ordiniOggi.filter((o) => o.tipoOrdine === adminFiltro);
   }, [adminFiltro, ordiniOggi]);
+  const ordiniFiltratiStampa = useMemo(() => {
+    if (adminPrintFilter === "tutti") return ordiniFiltratiAdmin;
+    if (adminPrintFilter === "da-stampare") return ordiniFiltratiAdmin.filter((o) => !o.printed);
+    return ordiniFiltratiAdmin.filter((o) => o.printed);
+  }, [adminPrintFilter, ordiniFiltratiAdmin]);
+  const comandeDaStampare = useMemo(
+    () => ordiniOggi.filter((o) => !o.printed).length,
+    [ordiniOggi]
+  );
+  const comandeStampate = useMemo(
+    () => ordiniOggi.filter((o) => o.printed).length,
+    [ordiniOggi]
+  );
   const ordiniAttiviPerSlot = useMemo(
     () =>
       ordiniOggi.filter(
@@ -1229,6 +1254,7 @@ export default function Home() {
       telefonoCliente: profiloCliente.telefono,
       noteRider: tipoOrdine === "consegna" ? indirizzoCheckout?.noteConsegna : undefined,
       source: "app",
+      printed: false,
     };
     setOrdini((prev) => [nuovoOrdine, ...prev]);
     setClienti((prev) =>
@@ -1456,6 +1482,27 @@ export default function Home() {
     setSlotCapacityDraft(nuovaConfig);
   }
 
+  function apriAnteprimaComanda(ordiniDaStampare: Ordine[]) {
+    if (!ordiniDaStampare.length) return;
+    setPrintPreviewOrders(ordiniDaStampare);
+    setShowPrintPreview(true);
+  }
+
+  function stampaComandeAnteprima() {
+    if (!printPreviewOrders.length) return;
+    const printedAt = new Date().toISOString();
+    const ids = new Set(printPreviewOrders.map((o) => o.id));
+    setOrdini((prev) =>
+      prev.map((ordine) =>
+        ids.has(ordine.id)
+          ? { ...ordine, printed: true, printedAt }
+          : ordine
+      )
+    );
+    window.print();
+    setShowPrintPreview(false);
+  }
+
   function resetManualOrderForm() {
     setManualCustomerName("");
     setManualCustomerPhone("");
@@ -1513,6 +1560,7 @@ export default function Home() {
       noteRider: manualTipoOrdine === "consegna" ? manualDeliveryNotes.trim() : undefined,
       telefonoCliente: manualCustomerPhone.trim(),
       source: "telefono",
+      printed: false,
     };
     setOrdini((prev) => [nuovoOrdine, ...prev]);
     setClienti((prev) => {
@@ -2393,9 +2441,28 @@ export default function Home() {
 
               <section className="space-y-2">
                 <h2 className="text-sm font-bold uppercase tracking-wide text-[#9a715c]">Ordini di oggi - Kanban operativo</h2>
+                <div className="grid grid-cols-2 gap-2">
+                  <MetricCard titolo="Comande da stampare" valore={String(comandeDaStampare)} />
+                  <MetricCard titolo="Comande stampate oggi" valore={String(comandeStampate)} />
+                </div>
                 <button onClick={avanzaTuttiOrdiniAttivi} className="w-full rounded-xl border border-[#d59e7d] bg-white px-4 py-3 text-sm font-semibold text-[#8f3b18]">
                   Avanza tutti gli ordini attivi ({ordiniAttiviCount})
                 </button>
+                <button
+                  onClick={() => apriAnteprimaComanda(ordiniOggi.filter((o) => !o.printed))}
+                  disabled={comandeDaStampare === 0}
+                  className="w-full rounded-xl bg-[#8f3b18] px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Stampa comande non ancora stampate
+                </button>
+                <p className="text-xs text-[#6d4331]">
+                  Stampa solo gli ordini che non hanno ancora una comanda cucina stampata.
+                </p>
+                {comandeDaStampare === 0 && (
+                  <p className="rounded-xl bg-emerald-100 p-2 text-xs font-semibold text-emerald-800">
+                    Tutte le comande sono gia state stampate.
+                  </p>
+                )}
                 <div className="grid grid-cols-3 gap-2 rounded-2xl border border-[#f0d7c7] bg-white p-1">
                   <button
                     onClick={() => setAdminFiltro("tutti")}
@@ -2416,10 +2483,15 @@ export default function Home() {
                     Solo consegna
                   </button>
                 </div>
+                <div className="grid grid-cols-3 gap-2 rounded-2xl border border-[#f0d7c7] bg-white p-1">
+                  <button onClick={() => setAdminPrintFilter("tutti")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "tutti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Tutti</button>
+                  <button onClick={() => setAdminPrintFilter("da-stampare")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "da-stampare" ? "bg-amber-100 text-amber-800" : "text-[#82513a]"}`}>Da stampare</button>
+                  <button onClick={() => setAdminPrintFilter("stampati")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "stampati" ? "bg-emerald-100 text-emerald-800" : "text-[#82513a]"}`}>Stampati</button>
+                </div>
 
                 <div className="flex gap-3 overflow-x-auto pb-1">
                   {KANBAN_COLUMNS.map((column) => {
-                    const ordiniColonna = ordiniFiltratiAdmin.filter(
+                    const ordiniColonna = ordiniFiltratiStampa.filter(
                       (ordine) => getKanbanColumn(ordine.stato) === column.key
                     );
                     return (
@@ -2497,6 +2569,9 @@ export default function Home() {
                                     CONTANTI
                                   </span>
                                 )}
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.printed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>
+                                  {ordine.printed ? "COMANDA STAMPATA" : "DA STAMPARE"}
+                                </span>
                               </div>
                               <p className="mt-1 text-[10px] text-[#6d4331]">
                                 Pagamento: {getPaymentMethodLabel(ordine.paymentMethod)} - {getPaymentStatusLabel(ordine.paymentStatus)}
@@ -2539,6 +2614,12 @@ export default function Home() {
                                 className="mt-2 w-full rounded-lg bg-[#8f3b18] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 Avanza stato
+                              </button>
+                              <button
+                                onClick={() => apriAnteprimaComanda([ordine])}
+                                className="mt-2 w-full rounded-lg border border-[#8f3b18] bg-white px-3 py-2 text-xs font-semibold text-[#8f3b18]"
+                              >
+                                Stampa comanda
                               </button>
                             </article>
                             );
@@ -2999,6 +3080,47 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {showPrintPreview && (
+        <div className="fixed inset-0 z-30 bg-black/40 p-3">
+          <div className="mx-auto mt-10 max-w-md rounded-3xl bg-white p-4">
+            <h3 className="text-lg font-bold">Anteprima comanda</h3>
+            <p className="mt-1 text-xs text-[#6d4331]">Comande selezionate: {printPreviewOrders.length}</p>
+            <div className="mt-3 max-h-80 space-y-2 overflow-y-auto">
+              {printPreviewOrders.map((ordine) => (
+                <div key={`preview-${ordine.id}`} className="rounded-xl bg-[#fff7f0] p-3 text-xs text-[#6d4331]">
+                  <p className="font-semibold text-[#3a1f12]">{ordine.id}</p>
+                  <p>{ordine.clienteNome} - {ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}</p>
+                  <p>Orario: {ordine.orarioScelto}</p>
+                  <p>Prodotti: {ordine.righe.map((r) => `${r.quantita}x ${r.nome}`).join(", ")}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button onClick={stampaComandeAnteprima} className="rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white">Stampa</button>
+              <button onClick={() => setShowPrintPreview(false)} className="rounded-xl border border-[#d59e7d] py-3 text-sm font-semibold text-[#8f3b18]">Chiudi</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <section className="print-only" id="print-root">
+        {printPreviewOrders.map((ordine) => (
+          <ComandaPrintView key={`print-${ordine.id}`} ordine={ordine} />
+        ))}
+      </section>
+
+      <style jsx global>{`
+        @media print {
+          .print-only { display: block !important; }
+          main, nav, header, section:not(#print-root), button, .fixed { display: none !important; }
+          #print-root { display: block !important; padding: 0; margin: 0; }
+          .comanda-print { page-break-after: always; color: #000; background: #fff; padding: 16px; font-size: 12px; }
+        }
+        @media screen {
+          .print-only { display: none; }
+        }
+      `}</style>
     </div>
   );
 }
@@ -3008,6 +3130,52 @@ function MetricCard({ titolo, valore }: { titolo: string; valore: string }) {
     <article className="rounded-2xl border border-[#f0d7c7] bg-white p-3">
       <p className="text-xs text-[#9a715c]">{titolo}</p>
       <p className="mt-1 text-lg font-bold leading-none">{valore}</p>
+    </article>
+  );
+}
+
+function ComandaPrintView({ ordine }: { ordine: Ordine }) {
+  return (
+    <article className="comanda-print">
+      <h1 style={{ fontWeight: 700 }}>PIZZAFLOW</h1>
+      <h2 style={{ fontWeight: 700 }}>COMANDA CUCINA</h2>
+      <p>Codice: {ordine.id}</p>
+      <p>Data ordine: {formatItalianDate(ordine.orderDate)}</p>
+      <p>Ora inserimento: {formatItalianTime(ordine.createdAt)}</p>
+      <p>Orario richiesto: {ordine.orarioScelto}</p>
+      <hr />
+      <p>Tipo ordine: {ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}</p>
+      <p>Fonte ordine: {ordine.source.toUpperCase()}</p>
+      <p>Stato ordine: {ordine.stato}</p>
+      <p>Cliente: {ordine.clienteNome}</p>
+      <p>Telefono: {ordine.telefonoCliente || "-"}</p>
+      {ordine.tipoOrdine === "consegna" && (
+        <>
+          <p>Indirizzo: {ordine.indirizzo || "-"}</p>
+          <p>Citofono/interno: {ordine.citofonoInterno || "-"}</p>
+          <p>Note consegna: {ordine.noteRider || "-"}</p>
+          {ordine.needsPos && <p>PORTARE POS</p>}
+        </>
+      )}
+      <hr />
+      {ordine.righe.map((riga) => (
+        <div key={`print-row-${ordine.id}-${riga.id}`} style={{ marginBottom: 8 }}>
+          <p>{riga.quantita}x {riga.nome} ({formatEuro(riga.basePrezzo)})</p>
+          {riga.extra.length > 0 && <p>Extra: {riga.extra.join(", ")}</p>}
+          {riga.ingredientiRimossi && riga.ingredientiRimossi.length > 0 && <p>Senza: {riga.ingredientiRimossi.join(", ")}</p>}
+          {riga.note && <p>Note pizza: {riga.note}</p>}
+        </div>
+      ))}
+      <hr />
+      <p>Pagamento: {getPaymentMethodLabel(ordine.paymentMethod)}</p>
+      <p>Stato pagamento: {getPaymentStatusLabel(ordine.paymentStatus)}</p>
+      <p>{ordine.paymentStatus === "pagato" ? "Pagato" : "Da incassare"}</p>
+      {ordine.paymentMethod === "card_at_pickup" && <p>POS in pizzeria</p>}
+      {ordine.paymentMethod === "card_on_delivery" && <p>Portare POS</p>}
+      {(ordine.paymentMethod === "cash_on_delivery" || ordine.paymentMethod === "cash_at_pickup") && <p>Contanti</p>}
+      <hr />
+      <p>Stampato il {formatItalianDate((ordine.printedAt || new Date().toISOString()).slice(0, 10))} alle {formatItalianTime(ordine.printedAt || new Date().toISOString())}</p>
+      <div style={{ marginTop: 16, height: 50, borderTop: "1px dashed #333" }}>Note manuali:</div>
     </article>
   );
 }
