@@ -13,7 +13,13 @@ type KanbanColonna =
   | "pronto-in-consegna"
   | "completato";
 type SlotStato = "disponibile" | "quasi pieno" | "pieno";
-type SlotFiltro = "tutti" | "disponibili" | "quasi-pieni" | "pieni";
+type SlotFiltro =
+  | "tutti"
+  | "ritiro-disponibili"
+  | "ritiro-pieni"
+  | "consegna-disponibili"
+  | "consegna-pieni"
+  | "cucina-piena";
 type AdminTab =
   | "dashboard"
   | "ordini"
@@ -142,9 +148,27 @@ const ORARI_PIZZERIA = {
   openingTime: "18:30",
   closingTime: "22:30",
   slotIntervalMinutes: 15,
-  maxOrdiniPerSlot: 8,
-  maxPizzePerSlot: 25,
 } as const;
+
+type SlotCapacityConfig = {
+  maxTotalPizzasPerSlot: number;
+  maxPickupPizzasPerSlot: number;
+  maxDeliveryPizzasPerSlot: number;
+  maxPickupOrdersPerSlot: number;
+  maxDeliveryOrdersPerSlot: number;
+  ridersAvailable: number;
+  pizzasPerRiderPerSlot: number;
+};
+
+const DEFAULT_SLOT_CAPACITY: SlotCapacityConfig = {
+  maxTotalPizzasPerSlot: 25,
+  maxPickupPizzasPerSlot: 18,
+  maxDeliveryPizzasPerSlot: 7,
+  maxPickupOrdersPerSlot: 8,
+  maxDeliveryOrdersPerSlot: 4,
+  ridersAvailable: 2,
+  pizzasPerRiderPerSlot: 4,
+};
 
 const PIPELINE_RITIRO: StatoOrdine[] = [
   "ricevuto",
@@ -537,14 +561,16 @@ function calcolaCostoConsegna(subtotale: number, tipoOrdine: TipoOrdine) {
 
 function getSlotStatus(
   ordiniPrenotati: number,
-  pizzePrenotate: number
+  pizzePrenotate: number,
+  maxOrdini: number,
+  maxPizze: number
 ): SlotStato {
-  const residualOrders = ORARI_PIZZERIA.maxOrdiniPerSlot - ordiniPrenotati;
-  const residualPizzas = ORARI_PIZZERIA.maxPizzePerSlot - pizzePrenotate;
+  const residualOrders = maxOrdini - ordiniPrenotati;
+  const residualPizzas = maxPizze - pizzePrenotate;
   if (residualOrders <= 0 || residualPizzas <= 0) return "pieno";
   if (
-    residualOrders / ORARI_PIZZERIA.maxOrdiniPerSlot < 0.3 ||
-    residualPizzas / ORARI_PIZZERIA.maxPizzePerSlot < 0.3
+    residualOrders / Math.max(maxOrdini, 1) < 0.3 ||
+    residualPizzas / Math.max(maxPizze, 1) < 0.3
   ) {
     return "quasi pieno";
   }
@@ -714,6 +740,8 @@ export default function Home() {
   const [simulatedPaidAt, setSimulatedPaidAt] = useState<string | undefined>(undefined);
   const [slotAvailabilityNotice, setSlotAvailabilityNotice] = useState("");
   const [slotFiltro, setSlotFiltro] = useState<SlotFiltro>("tutti");
+  const [slotCapacityConfig, setSlotCapacityConfig] = useState(DEFAULT_SLOT_CAPACITY);
+  const [slotCapacityDraft, setSlotCapacityDraft] = useState(DEFAULT_SLOT_CAPACITY);
   const [manualCustomerName, setManualCustomerName] = useState("");
   const [manualCustomerPhone, setManualCustomerPhone] = useState("");
   const [manualCustomerEmail, setManualCustomerEmail] = useState("");
@@ -729,6 +757,7 @@ export default function Home() {
   const [manualPizzaQty, setManualPizzaQty] = useState(1);
   const [manualPizzaNote, setManualPizzaNote] = useState("");
   const [manualOrderNotice, setManualOrderNotice] = useState("");
+  const [manualForceInsert, setManualForceInsert] = useState(false);
   const [manualWhatsappMessage, setManualWhatsappMessage] = useState("");
   const [manualWhatsappPhone, setManualWhatsappPhone] = useState("");
   const [manualCopied, setManualCopied] = useState("");
@@ -845,52 +874,130 @@ export default function Home() {
     [ordiniOggi]
   );
   const calcolaSlotCapacity = useMemo(
-    () => (pizzeRichieste: number) =>
+    () => (pizzeRichieste: number, tipoOrdineSlot: TipoOrdine) =>
       generaSlotOrari().map((slot) => {
-      const ordiniSlot = ordiniAttiviPerSlot.filter((o) => o.orarioScelto === slot);
-      const ordiniPrenotati = ordiniSlot.length;
-      const pizzePrenotate = ordiniSlot.reduce(
-        (acc, ordine) =>
-          acc +
-          ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
-        0
-      );
-      const residualOrders = ORARI_PIZZERIA.maxOrdiniPerSlot - ordiniPrenotati;
-      const residualPizzas = ORARI_PIZZERIA.maxPizzePerSlot - pizzePrenotate;
-      const stato = getSlotStatus(ordiniPrenotati, pizzePrenotate);
-      const full = stato === "pieno";
-      const nonDisponibilePerOrdine =
-        !full && (residualOrders < 1 || residualPizzas < Math.max(pizzeRichieste, 1));
-      const selezionabile = !full && !nonDisponibilePerOrdine;
-      return {
-        slot,
-        ordiniPrenotati,
-        pizzePrenotate,
-        residualOrders,
-        residualPizzas,
-        stato,
-        full,
-        nonDisponibilePerOrdine,
-        selezionabile,
-      };
-    }),
-    [ordiniAttiviPerSlot]
+        const ordiniSlot = ordiniAttiviPerSlot.filter((o) => o.orarioScelto === slot);
+        const ordiniRitiro = ordiniSlot.filter((o) => o.tipoOrdine === "ritiro");
+        const ordiniConsegna = ordiniSlot.filter((o) => o.tipoOrdine === "consegna");
+        const pickupOrders = ordiniRitiro.length;
+        const deliveryOrders = ordiniConsegna.length;
+        const pickupPizzas = ordiniRitiro.reduce(
+          (acc, ordine) => acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
+          0
+        );
+        const deliveryPizzas = ordiniConsegna.reduce(
+          (acc, ordine) => acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
+          0
+        );
+        const totalPizzas = pickupPizzas + deliveryPizzas;
+        const totalResidualPizzas = slotCapacityConfig.maxTotalPizzasPerSlot - totalPizzas;
+        const pickupResidualOrders = slotCapacityConfig.maxPickupOrdersPerSlot - pickupOrders;
+        const deliveryResidualOrders = slotCapacityConfig.maxDeliveryOrdersPerSlot - deliveryOrders;
+        const pickupResidualPizzas = Math.min(
+          slotCapacityConfig.maxPickupPizzasPerSlot - pickupPizzas,
+          totalResidualPizzas
+        );
+        const deliveryResidualPizzas = Math.min(
+          slotCapacityConfig.maxDeliveryPizzasPerSlot - deliveryPizzas,
+          totalResidualPizzas
+        );
+        const pickupStatus = getSlotStatus(
+          pickupOrders,
+          pickupPizzas,
+          slotCapacityConfig.maxPickupOrdersPerSlot,
+          slotCapacityConfig.maxPickupPizzasPerSlot
+        );
+        const deliveryStatus = getSlotStatus(
+          deliveryOrders,
+          deliveryPizzas,
+          slotCapacityConfig.maxDeliveryOrdersPerSlot,
+          slotCapacityConfig.maxDeliveryPizzasPerSlot
+        );
+        const kitchenFull = totalResidualPizzas <= 0;
+        const pickupOverloaded = pickupPizzas > slotCapacityConfig.maxPickupPizzasPerSlot;
+        const deliveryOverloaded = deliveryPizzas > slotCapacityConfig.maxDeliveryPizzasPerSlot;
+        const kitchenOverloaded = totalPizzas > slotCapacityConfig.maxTotalPizzasPerSlot;
+        const pickupFull = pickupStatus === "pieno" || kitchenFull;
+        const deliveryFull = deliveryStatus === "pieno" || kitchenFull;
+        const riderLimited =
+          slotCapacityConfig.ridersAvailable <= 0 ||
+          deliveryResidualPizzas <= Math.ceil(slotCapacityConfig.pizzasPerRiderPerSlot);
+        const selectedResidualOrders =
+          tipoOrdineSlot === "ritiro" ? pickupResidualOrders : deliveryResidualOrders;
+        const selectedResidualPizzas =
+          tipoOrdineSlot === "ritiro" ? pickupResidualPizzas : deliveryResidualPizzas;
+        const selectedOverloaded =
+          tipoOrdineSlot === "ritiro" ? pickupOverloaded || kitchenOverloaded : deliveryOverloaded || kitchenOverloaded;
+        const selectedFull = (tipoOrdineSlot === "ritiro" ? pickupFull : deliveryFull) || selectedOverloaded;
+        const nonDisponibilePerOrdine =
+          !selectedFull &&
+          (selectedResidualOrders < 1 || selectedResidualPizzas < Math.max(pizzeRichieste, 1));
+        const selezionabile = !selectedFull && !nonDisponibilePerOrdine;
+        return {
+          slot,
+          pickupOrders,
+          deliveryOrders,
+          pickupPizzas,
+          deliveryPizzas,
+          totalPizzas,
+          pickupResidualOrders,
+          deliveryResidualOrders,
+          pickupResidualPizzas,
+          deliveryResidualPizzas,
+          totalResidualPizzas,
+          pickupStatus,
+          deliveryStatus,
+          kitchenFull,
+          riderLimited,
+          pickupOverloaded,
+          deliveryOverloaded,
+          kitchenOverloaded,
+          stato: tipoOrdineSlot === "ritiro" ? pickupStatus : deliveryStatus,
+          full: selectedFull,
+          nonDisponibilePerOrdine,
+          selezionabile,
+        };
+      }),
+    [ordiniAttiviPerSlot, slotCapacityConfig]
   );
-  const slotCapacity = useMemo(() => calcolaSlotCapacity(pizzeNelCarrello), [calcolaSlotCapacity, pizzeNelCarrello]);
+  const slotCapacity = useMemo(
+    () => calcolaSlotCapacity(pizzeNelCarrello, tipoOrdine),
+    [calcolaSlotCapacity, pizzeNelCarrello, tipoOrdine]
+  );
+  const adminSlotCapacity = useMemo(
+    () => calcolaSlotCapacity(1, "ritiro"),
+    [calcolaSlotCapacity]
+  );
   const slotSummary = useMemo(
     () => ({
-      disponibili: slotCapacity.filter((s) => s.stato === "disponibile").length,
-      quasiPieni: slotCapacity.filter((s) => s.stato === "quasi pieno").length,
-      pieni: slotCapacity.filter((s) => s.stato === "pieno").length,
+      disponibili: adminSlotCapacity.filter(
+        (s) => s.pickupStatus !== "pieno" && s.deliveryStatus !== "pieno" && !s.kitchenFull
+      ).length,
+      quasiPieni: adminSlotCapacity.filter(
+        (s) => s.pickupStatus === "quasi pieno" || s.deliveryStatus === "quasi pieno"
+      ).length,
+      pieni: adminSlotCapacity.filter(
+        (s) => s.pickupStatus === "pieno" || s.deliveryStatus === "pieno" || s.kitchenFull
+      ).length,
     }),
-    [slotCapacity]
+    [adminSlotCapacity]
   );
   const slotCapacityFiltered = useMemo(() => {
-    if (slotFiltro === "tutti") return slotCapacity;
-    if (slotFiltro === "disponibili") return slotCapacity.filter((s) => s.stato === "disponibile");
-    if (slotFiltro === "quasi-pieni") return slotCapacity.filter((s) => s.stato === "quasi pieno");
-    return slotCapacity.filter((s) => s.stato === "pieno");
-  }, [slotCapacity, slotFiltro]);
+    if (slotFiltro === "tutti") return adminSlotCapacity;
+    if (slotFiltro === "ritiro-disponibili") {
+      return adminSlotCapacity.filter((s) => s.pickupStatus !== "pieno" && !s.kitchenFull);
+    }
+    if (slotFiltro === "ritiro-pieni") {
+      return adminSlotCapacity.filter((s) => s.pickupStatus === "pieno" || s.kitchenFull);
+    }
+    if (slotFiltro === "consegna-disponibili") {
+      return adminSlotCapacity.filter((s) => s.deliveryStatus !== "pieno" && !s.kitchenFull);
+    }
+    if (slotFiltro === "consegna-pieni") {
+      return adminSlotCapacity.filter((s) => s.deliveryStatus === "pieno" || s.kitchenFull);
+    }
+    return adminSlotCapacity.filter((s) => s.kitchenFull);
+  }, [adminSlotCapacity, slotFiltro]);
   const selectedSlotInfo = useMemo(
     () => slotCapacity.find((s) => s.slot === orarioScelto),
     [orarioScelto, slotCapacity]
@@ -916,7 +1023,10 @@ export default function Home() {
     [manualSubtotal, manualTipoOrdine]
   );
   const manualTotal = manualSubtotal + manualDeliveryCost;
-  const manualSlotCapacity = useMemo(() => calcolaSlotCapacity(manualPizzaCount), [calcolaSlotCapacity, manualPizzaCount]);
+  const manualSlotCapacity = useMemo(
+    () => calcolaSlotCapacity(manualPizzaCount, manualTipoOrdine),
+    [calcolaSlotCapacity, manualPizzaCount, manualTipoOrdine]
+  );
   const manualSelectedSlotInfo = useMemo(
     () => manualSlotCapacity.find((s) => s.slot === manualOrarioScelto),
     [manualOrarioScelto, manualSlotCapacity]
@@ -937,6 +1047,8 @@ export default function Home() {
     () => MENU_PIZZE.find((pizza) => pizza.id === manualSelectedPizzaId) ?? null,
     [manualSelectedPizzaId]
   );
+  const calcolataDeliveryCapacityDraft =
+    slotCapacityDraft.ridersAvailable * slotCapacityDraft.pizzasPerRiderPerSlot;
   const clientiConApp = useMemo(() => clienti.filter((c) => c.hasApp), [clienti]);
   const clientiSenzaApp = useMemo(() => clienti.filter((c) => !c.hasApp), [clienti]);
   const clientiDaTelefono = useMemo(() => clienti.filter((c) => c.source === "telefono"), [clienti]);
@@ -1331,6 +1443,19 @@ export default function Home() {
     return `Ciao ${nome}, riordina la tua solita pizza dall'app entro 7 giorni e ricevi un extra omaggio.`;
   }
 
+  function applicaCapacitaDemo() {
+    const deliveryByRider = Math.max(
+      0,
+      slotCapacityDraft.ridersAvailable * slotCapacityDraft.pizzasPerRiderPerSlot
+    );
+    const nuovaConfig = {
+      ...slotCapacityDraft,
+      maxDeliveryPizzasPerSlot: deliveryByRider,
+    };
+    setSlotCapacityConfig(nuovaConfig);
+    setSlotCapacityDraft(nuovaConfig);
+  }
+
   function resetManualOrderForm() {
     setManualCustomerName("");
     setManualCustomerPhone("");
@@ -1346,11 +1471,17 @@ export default function Home() {
     setManualExtraSelezionati([]);
     setManualPizzaQty(1);
     setManualPizzaNote("");
+    setManualForceInsert(false);
   }
 
   function creaOrdineTelefonico() {
     if (!manualCustomerName.trim() || !manualPhoneNormalized || manualRows.length === 0) return;
-    if (!manualSelectedSlotInfo?.selezionabile) return;
+    if (
+      !manualSelectedSlotInfo?.selezionabile &&
+      !(manualTipoOrdine === "consegna" && manualForceInsert)
+    ) {
+      return;
+    }
     if (
       manualTipoOrdine === "consegna" &&
       (!manualAddress.trim() || !manualCitofono.trim())
@@ -1660,7 +1791,9 @@ export default function Home() {
                             <p className="text-sm font-semibold">{slot.slot}</p>
                             <p className="text-xs font-semibold">
                               {slot.full
-                                ? "Pieno"
+                                ? slot.kitchenOverloaded || slot.pickupOverloaded || slot.deliveryOverloaded
+                                  ? "Non disponibile"
+                                  : "Pieno"
                                 : slot.nonDisponibilePerOrdine
                                   ? "Non disponibile per questo ordine"
                                   : slot.stato === "quasi pieno"
@@ -1669,8 +1802,17 @@ export default function Home() {
                             </p>
                           </div>
                           <p className="mt-1 text-xs text-[#6d4331]">
-                            Posti residui: {Math.max(slot.residualPizzas, 0)} pizze
+                            {tipoOrdine === "ritiro"
+                              ? `Posti residui ritiro: ${Math.max(slot.pickupResidualPizzas, 0)} pizze`
+                              : `Consegne residue: ${Math.max(slot.deliveryResidualPizzas, 0)} pizze`}
                           </p>
+                          {tipoOrdine === "consegna" && (slot.full || slot.riderLimited) && (
+                            <p className="mt-1 text-xs font-semibold text-amber-800">
+                              {slot.full
+                                ? "Non disponibile"
+                                : "RIDER LIMITATO"}
+                            </p>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -2091,8 +2233,35 @@ export default function Home() {
                   <p>Apertura: {ORARI_PIZZERIA.openingTime}</p>
                   <p>Chiusura: {ORARI_PIZZERIA.closingTime}</p>
                   <p>Intervallo slot: {ORARI_PIZZERIA.slotIntervalMinutes} minuti</p>
-                  <p>Massimo ordini per slot demo: {ORARI_PIZZERIA.maxOrdiniPerSlot}</p>
-                  <p>Massimo pizze per slot demo: {ORARI_PIZZERIA.maxPizzePerSlot}</p>
+                </div>
+                <div className="mt-4 space-y-2 rounded-xl bg-[#fff7f0] p-3 text-xs">
+                  <p className="font-semibold uppercase tracking-wide text-[#9a715c]">Capacita ritiro e consegna</p>
+                  <label className="block">
+                    Pizze totali per slot
+                    <input type="number" min={1} value={slotCapacityDraft.maxTotalPizzasPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxTotalPizzasPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
+                  </label>
+                  <label className="block">
+                    Pizze ritiro per slot
+                    <input type="number" min={1} value={slotCapacityDraft.maxPickupPizzasPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxPickupPizzasPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
+                  </label>
+                  <label className="block">
+                    Ordini ritiro per slot
+                    <input type="number" min={1} value={slotCapacityDraft.maxPickupOrdersPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxPickupOrdersPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
+                  </label>
+                  <label className="block">
+                    Rider disponibili
+                    <input type="number" min={0} value={slotCapacityDraft.ridersAvailable} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, ridersAvailable: Math.max(0, Number(e.target.value) || 0) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
+                  </label>
+                  <label className="block">
+                    Pizze consegnabili per rider per slot
+                    <input type="number" min={1} value={slotCapacityDraft.pizzasPerRiderPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, pizzasPerRiderPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
+                  </label>
+                  <p>Pizze consegna per slot (calcolate): <span className="font-semibold">{calcolataDeliveryCapacityDraft}</span></p>
+                  <label className="block">
+                    Ordini consegna per slot
+                    <input type="number" min={1} value={slotCapacityDraft.maxDeliveryOrdersPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxDeliveryOrdersPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
+                  </label>
+                  <button onClick={applicaCapacitaDemo} className="w-full rounded-xl bg-[#8f3b18] py-2 font-semibold text-white">Applica capacita demo</button>
                 </div>
               </section>
 
@@ -2109,6 +2278,9 @@ export default function Home() {
                     Pieni: <span className="font-semibold">{slotSummary.pieni}</span>
                   </p>
                 </div>
+                <div className="mt-2 rounded-xl bg-[#fff7f0] p-2 text-[11px] text-[#6d4331]">
+                  Stati: disponibile · quasi pieno · pieno · sovraccarico
+                </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-[#f0d7c7] bg-[#fffaf6] p-1">
                   <button
                     onClick={() => setSlotFiltro("tutti")}
@@ -2117,22 +2289,34 @@ export default function Home() {
                     Tutti
                   </button>
                   <button
-                    onClick={() => setSlotFiltro("disponibili")}
-                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "disponibili" ? "bg-emerald-100 text-emerald-800" : "text-[#82513a]"}`}
+                    onClick={() => setSlotFiltro("ritiro-disponibili")}
+                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "ritiro-disponibili" ? "bg-emerald-100 text-emerald-800" : "text-[#82513a]"}`}
                   >
-                    Solo disponibili
+                    Ritiro disponibili
                   </button>
                   <button
-                    onClick={() => setSlotFiltro("quasi-pieni")}
-                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "quasi-pieni" ? "bg-amber-100 text-amber-800" : "text-[#82513a]"}`}
+                    onClick={() => setSlotFiltro("ritiro-pieni")}
+                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "ritiro-pieni" ? "bg-red-100 text-red-800" : "text-[#82513a]"}`}
                   >
-                    Solo quasi pieni
+                    Ritiro pieni
                   </button>
                   <button
-                    onClick={() => setSlotFiltro("pieni")}
-                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "pieni" ? "bg-red-100 text-red-800" : "text-[#82513a]"}`}
+                    onClick={() => setSlotFiltro("consegna-disponibili")}
+                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "consegna-disponibili" ? "bg-sky-100 text-sky-800" : "text-[#82513a]"}`}
                   >
-                    Solo pieni
+                    Consegna disponibili
+                  </button>
+                  <button
+                    onClick={() => setSlotFiltro("consegna-pieni")}
+                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "consegna-pieni" ? "bg-orange-100 text-orange-800" : "text-[#82513a]"}`}
+                  >
+                    Consegna pieni
+                  </button>
+                  <button
+                    onClick={() => setSlotFiltro("cucina-piena")}
+                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "cucina-piena" ? "bg-stone-200 text-stone-900" : "text-[#82513a]"}`}
+                  >
+                    Cucina piena
                   </button>
                 </div>
                 <div className="mt-3 space-y-2">
@@ -2140,25 +2324,63 @@ export default function Home() {
                     <div
                       key={`cap-${slot.slot}`}
                       className={`rounded-xl border p-3 text-xs ${
-                        slot.stato === "pieno"
+                        slot.kitchenOverloaded
+                          ? "border-red-700 bg-red-200 ring-2 ring-red-600"
+                          : slot.kitchenFull
+                          ? "border-stone-400 bg-stone-100"
+                          : slot.pickupOverloaded || slot.deliveryOverloaded
+                            ? "border-red-600 bg-red-100 ring-2 ring-red-500"
+                          : slot.pickupStatus === "pieno" || slot.deliveryStatus === "pieno"
                           ? "border-red-300 bg-red-50"
-                          : slot.stato === "quasi pieno"
+                          : slot.pickupStatus === "quasi pieno" || slot.deliveryStatus === "quasi pieno"
                             ? "border-amber-300 bg-amber-50"
                             : "border-[#ecd7c8] bg-[#fffaf6]"
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <p className="font-semibold">{slot.slot}</p>
-                        <p className="font-semibold">
-                          {slot.stato === "pieno"
-                            ? "Pieno"
-                            : slot.stato === "quasi pieno"
-                              ? "Quasi pieno"
-                              : "Disponibile"}
-                        </p>
+                      <div className="flex items-center justify-between pb-2">
+                        <p className="font-semibold">Orario {slot.slot}</p>
+                        <div className="flex flex-wrap justify-end gap-1">
+                        {slot.riderLimited && (
+                          <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                            RIDER LIMITATO
+                          </span>
+                        )}
+                        {slot.deliveryOverloaded && (
+                          <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                            SOVRACCARICO CONSEGNE
+                          </span>
+                        )}
+                        {slot.pickupOverloaded && (
+                          <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                            SOVRACCARICO RITIRO
+                          </span>
+                        )}
+                        {slot.kitchenOverloaded && (
+                          <span className="rounded-full bg-red-800 px-2 py-0.5 text-[10px] font-bold text-white">
+                            CUCINA OLTRE CAPACITA
+                          </span>
+                        )}
+                        </div>
                       </div>
-                      <p>Ordini: {slot.ordiniPrenotati}/{ORARI_PIZZERIA.maxOrdiniPerSlot}</p>
-                      <p>Pizze: {slot.pizzePrenotate}/{ORARI_PIZZERIA.maxPizzePerSlot}</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="rounded-lg bg-white p-2">
+                          <p className="font-bold text-amber-800">RITIRO</p>
+                          <p>Ordini: {slot.pickupOrders} / {slotCapacityConfig.maxPickupOrdersPerSlot}</p>
+                          <p>Pizze: {slot.pickupPizzas} / {slotCapacityConfig.maxPickupPizzasPerSlot}</p>
+                          <p>Stato: {slot.pickupOverloaded ? "sovraccarico" : slot.pickupStatus}</p>
+                        </div>
+                        <div className="rounded-lg bg-white p-2">
+                          <p className="font-bold text-sky-800">CONSEGNA</p>
+                          <p>Ordini: {slot.deliveryOrders} / {slotCapacityConfig.maxDeliveryOrdersPerSlot}</p>
+                          <p>Pizze: {slot.deliveryPizzas} / {slotCapacityConfig.maxDeliveryPizzasPerSlot}</p>
+                          <p>Rider: {slotCapacityConfig.ridersAvailable}</p>
+                          <p>Stato: {slot.deliveryOverloaded ? "sovraccarico" : slot.deliveryStatus}</p>
+                        </div>
+                      </div>
+                      <p className="mt-2 rounded-lg bg-white p-2 font-semibold">
+                        TOTALE CUCINA - Pizze: {slot.totalPizzas} / {slotCapacityConfig.maxTotalPizzasPerSlot} (
+                        {slot.kitchenOverloaded ? "sovraccarico cucina" : slot.kitchenFull ? "pieno" : "ok"})
+                      </p>
                     </div>
                   ))}
                   {slotCapacityFiltered.length === 0 && (
@@ -2369,9 +2591,36 @@ export default function Home() {
                             <span className="font-semibold">{slot.slot}</span>
                             <span className="font-semibold">{slot.stato === "disponibile" ? "Disponibile" : slot.stato === "quasi pieno" ? "Quasi pieno" : "Pieno"}</span>
                           </div>
+                          <p className="mt-1 text-[11px] text-[#6d4331]">
+                            {manualTipoOrdine === "ritiro"
+                              ? `Residuo ritiro: ${Math.max(slot.pickupResidualPizzas, 0)} pizze`
+                              : `Residuo consegna: ${Math.max(slot.deliveryResidualPizzas, 0)} pizze`}
+                          </p>
+                          {manualTipoOrdine === "consegna" && slot.riderLimited && (
+                            <p className="mt-1 text-[11px] font-semibold text-amber-800">RIDER LIMITATO</p>
+                          )}
+                          {manualTipoOrdine === "consegna" && (slot.deliveryOverloaded || slot.kitchenOverloaded) && (
+                            <p className="mt-1 text-[11px] font-semibold text-red-800">SOVRACCARICO CONSEGNE</p>
+                          )}
                         </button>
                       ))}
                     </div>
+                    {manualTipoOrdine === "consegna" && manualSelectedSlotInfo?.riderLimited && (
+                      <p className="mt-2 rounded-lg bg-amber-100 p-2 text-[11px] font-semibold text-amber-900">
+                        Capacita rider limitata in questa fascia oraria.
+                      </p>
+                    )}
+                    {manualTipoOrdine === "consegna" && manualSelectedSlotInfo && !manualSelectedSlotInfo.selezionabile && (
+                      <div className="mt-2 space-y-2 rounded-lg bg-red-100 p-2 text-[11px] font-semibold text-red-900">
+                        <p>Attenzione: consegne oltre capacità. Aggiungi solo se vuoi forzare manualmente.</p>
+                        <button
+                          onClick={() => setManualForceInsert((prev) => !prev)}
+                          className={`w-full rounded-lg py-2 ${manualForceInsert ? "bg-red-700 text-white" : "bg-white text-red-800"}`}
+                        >
+                          {manualForceInsert ? "Forzatura attiva" : "Forza inserimento"}
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2 rounded-xl bg-[#fff7f0] p-3">
@@ -2444,7 +2693,7 @@ export default function Home() {
                     )}
                   </div>
 
-                  <button onClick={creaOrdineTelefonico} disabled={!manualSelectedSlotInfo?.selezionabile || manualRows.length === 0} className="w-full rounded-2xl bg-[#8f3b18] py-4 text-base font-bold text-white disabled:opacity-50">
+                  <button onClick={creaOrdineTelefonico} disabled={(!manualSelectedSlotInfo?.selezionabile && !(manualTipoOrdine === "consegna" && manualForceInsert)) || manualRows.length === 0} className="w-full rounded-2xl bg-[#8f3b18] py-4 text-base font-bold text-white disabled:opacity-50">
                     Crea ordine telefonico
                   </button>
                   {manualOrderNotice && <p className="rounded-xl bg-[#f4dfd0] p-3 text-sm text-[#6d4331]">{manualOrderNotice}</p>}
