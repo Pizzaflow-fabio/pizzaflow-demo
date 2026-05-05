@@ -14,6 +14,14 @@ type KanbanColonna =
   | "completato";
 type SlotStato = "disponibile" | "quasi pieno" | "pieno";
 type SlotFiltro = "tutti" | "disponibili" | "quasi-pieni" | "pieni";
+type AdminTab =
+  | "dashboard"
+  | "ordini"
+  | "ordine-telefonico"
+  | "crm"
+  | "rfm"
+  | "prodotti"
+  | "marketing";
 type StatoOrdine =
   | "ricevuto"
   | "accettato"
@@ -88,6 +96,8 @@ type PaymentMethod =
   | "paypal_demo";
 
 type PaymentStatus = "da pagare" | "pagato";
+type OrderSource = "app" | "telefono";
+type CustomerSource = "app" | "telefono";
 
 type Ordine = {
   id: string;
@@ -112,15 +122,19 @@ type Ordine = {
   citofonoInterno?: string;
   telefonoCliente?: string;
   noteRider?: string;
+  source: OrderSource;
 };
 
 type Cliente = {
   id: string;
   nome: string;
   telefono: string;
+  email?: string;
   ordiniTotali: number;
   ultimoOrdineGiorniFa: number;
   preferenzaWeekend: boolean;
+  hasApp: boolean;
+  source: CustomerSource;
 };
 
 const EXTRA_PREZZO = 1.5;
@@ -171,10 +185,10 @@ const MENU_PIZZE: Pizza[] = [
 ];
 
 const CLIENTI_DEMO: Cliente[] = [
-  { id: "c1", nome: "Giulia B.", telefono: "333 1002001", ordiniTotali: 18, ultimoOrdineGiorniFa: 2, preferenzaWeekend: true },
-  { id: "c2", nome: "Luca P.", telefono: "333 1002002", ordiniTotali: 4, ultimoOrdineGiorniFa: 26, preferenzaWeekend: false },
-  { id: "c3", nome: "Marta R.", telefono: "333 1002003", ordiniTotali: 12, ultimoOrdineGiorniFa: 8, preferenzaWeekend: true },
-  { id: "c4", nome: "Davide F.", telefono: "333 1002004", ordiniTotali: 1, ultimoOrdineGiorniFa: 3, preferenzaWeekend: false },
+  { id: "c1", nome: "Giulia B.", telefono: "333 1002001", email: "giulia@email.demo", ordiniTotali: 18, ultimoOrdineGiorniFa: 2, preferenzaWeekend: true, hasApp: true, source: "app" },
+  { id: "c2", nome: "Luca P.", telefono: "333 1002002", email: "luca@email.demo", ordiniTotali: 4, ultimoOrdineGiorniFa: 26, preferenzaWeekend: false, hasApp: true, source: "app" },
+  { id: "c3", nome: "Marta R.", telefono: "333 1002003", email: "marta@email.demo", ordiniTotali: 12, ultimoOrdineGiorniFa: 8, preferenzaWeekend: true, hasApp: true, source: "app" },
+  { id: "c4", nome: "Davide F.", telefono: "333 1002004", email: "davide@email.demo", ordiniTotali: 1, ultimoOrdineGiorniFa: 3, preferenzaWeekend: false, hasApp: true, source: "app" },
 ];
 
 const ORDINI_INIZIALI: Ordine[] = [
@@ -195,6 +209,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     paymentStatus: "da pagare",
     needsPos: true,
     telefonoCliente: "333 1002001",
+    source: "app",
   },
   {
     id: "PF-2042",
@@ -218,6 +233,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     citofonoInterno: "Rossi, Int. 3B",
     telefonoCliente: "333 1002003",
     noteRider: "Suonare una volta sola",
+    source: "app",
   },
   {
     id: "PF-2043",
@@ -236,6 +252,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     paymentStatus: "da pagare",
     needsPos: false,
     telefonoCliente: "333 1002002",
+    source: "app",
   },
   {
     id: "PF-2044",
@@ -259,6 +276,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     citofonoInterno: "Reception 1",
     telefonoCliente: "333 1002004",
     noteRider: "Consegna reception piano terra",
+    source: "app",
   },
   {
     id: "PF-2045",
@@ -277,6 +295,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     paymentStatus: "da pagare",
     needsPos: false,
     telefonoCliente: "333 1002001",
+    source: "app",
   },
   {
     id: "PF-2046",
@@ -300,6 +319,7 @@ const ORDINI_INIZIALI: Ordine[] = [
     citofonoInterno: "Rossi, Int. 3B",
     telefonoCliente: "333 1002003",
     noteRider: "",
+    source: "app",
   },
 ];
 
@@ -366,6 +386,63 @@ const PROFILO_CLIENTE_DEMO: ProfiloClienteDemo = {
 
 function formatEuro(value: number) {
   return `EUR ${value.toFixed(2)}`;
+}
+
+function normalizzaTelefono(telefono: string) {
+  return telefono.replace(/\D/g, "");
+}
+
+function getRecencyScore(days: number) {
+  if (days <= 3) return 5;
+  if (days <= 7) return 4;
+  if (days <= 15) return 3;
+  if (days <= 30) return 2;
+  return 1;
+}
+
+function getFrequencyScore(ordiniTotali: number) {
+  if (ordiniTotali >= 15) return 5;
+  if (ordiniTotali >= 10) return 4;
+  if (ordiniTotali >= 6) return 3;
+  if (ordiniTotali >= 3) return 2;
+  return 1;
+}
+
+function getMonetaryScore(spesaTotale: number) {
+  if (spesaTotale >= 220) return 5;
+  if (spesaTotale >= 140) return 4;
+  if (spesaTotale >= 90) return 3;
+  if (spesaTotale >= 50) return 2;
+  return 1;
+}
+
+function getRfmSegment(r: number, f: number, m: number) {
+  if (r >= 4 && f >= 4 && m >= 4) return "Campioni";
+  if (r >= 3 && f >= 4) return "Clienti fedeli";
+  if (r >= 4 && f >= 2) return "Alto potenziale";
+  if (r >= 4 && f <= 1) return "Nuovi clienti";
+  if (r <= 2 && f >= 3 && m >= 3) return "A rischio";
+  if (r <= 2 && f >= 2) return "Da riattivare";
+  return "Persi";
+}
+
+function getRfmAction(segment: string) {
+  switch (segment) {
+    case "Campioni":
+      return "Premio esclusivo, non sconto pesante";
+    case "Clienti fedeli":
+      return "Vantaggi app e accesso anticipato";
+    case "Alto potenziale":
+      return "Spingere ordini ricorrenti in app";
+    case "Nuovi clienti":
+      return "Spingere secondo ordine";
+    case "Da riattivare":
+      return "Promo entro 7 giorni";
+    case "A rischio":
+      return "Reminder + omaggio leggero";
+    default:
+      return "Recupero soft con novita menu";
+  }
 }
 
 function formatItalianDate(isoDate?: string | null) {
@@ -595,6 +672,8 @@ export default function Home() {
   const [tabCliente, setTabCliente] = useState<ClienteTab>("home");
   const [carrello, setCarrello] = useState<RigaCarrello[]>([]);
   const [ordini, setOrdini] = useState<Ordine[]>(ORDINI_INIZIALI);
+  const [clienti, setClienti] = useState<Cliente[]>(CLIENTI_DEMO);
+  const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
   const [profiloCliente, setProfiloCliente] =
     useState<ProfiloClienteDemo>(PROFILO_CLIENTE_DEMO);
   const [pizzaSelezionata, setPizzaSelezionata] = useState<Pizza | null>(null);
@@ -635,6 +714,26 @@ export default function Home() {
   const [simulatedPaidAt, setSimulatedPaidAt] = useState<string | undefined>(undefined);
   const [slotAvailabilityNotice, setSlotAvailabilityNotice] = useState("");
   const [slotFiltro, setSlotFiltro] = useState<SlotFiltro>("tutti");
+  const [manualCustomerName, setManualCustomerName] = useState("");
+  const [manualCustomerPhone, setManualCustomerPhone] = useState("");
+  const [manualCustomerEmail, setManualCustomerEmail] = useState("");
+  const [manualTipoOrdine, setManualTipoOrdine] = useState<TipoOrdine>("ritiro");
+  const [manualAddress, setManualAddress] = useState("");
+  const [manualCitofono, setManualCitofono] = useState("");
+  const [manualDeliveryNotes, setManualDeliveryNotes] = useState("");
+  const [manualOrarioScelto, setManualOrarioScelto] = useState(generaSlotOrari()[0] ?? ORARI_PIZZERIA.openingTime);
+  const [manualPaymentMethod, setManualPaymentMethod] = useState<PaymentMethod>("cash_at_pickup");
+  const [manualRows, setManualRows] = useState<Array<RigaCarrello & { adminNote: string }>>([]);
+  const [manualSelectedPizzaId, setManualSelectedPizzaId] = useState(MENU_PIZZE[0]?.id ?? "");
+  const [manualExtraSelezionati, setManualExtraSelezionati] = useState<string[]>([]);
+  const [manualPizzaQty, setManualPizzaQty] = useState(1);
+  const [manualPizzaNote, setManualPizzaNote] = useState("");
+  const [manualOrderNotice, setManualOrderNotice] = useState("");
+  const [manualWhatsappMessage, setManualWhatsappMessage] = useState("");
+  const [manualWhatsappPhone, setManualWhatsappPhone] = useState("");
+  const [manualCopied, setManualCopied] = useState("");
+  const [crmPromoNotice, setCrmPromoNotice] = useState("");
+  const [marketingMessageNotice, setMarketingMessageNotice] = useState("");
 
   const totaleCarrello = useMemo(
     () =>
@@ -728,7 +827,7 @@ export default function Home() {
     [ordiniOggi]
   );
   const scontrinoMedio = ordiniOggi.length ? fatturatoDemo / ordiniOggi.length : 0;
-  const clientiAttivi = CLIENTI_DEMO.filter((c) => c.ultimoOrdineGiorniFa <= 30).length;
+  const clientiAttivi = clienti.filter((c) => c.ultimoOrdineGiorniFa <= 30).length;
   const ordiniAttiviCount = ordiniOggi.filter((o) => {
     const finalState = o.tipoOrdine === "ritiro" ? "ritirato" : "consegnato";
     return o.stato !== finalState;
@@ -745,8 +844,9 @@ export default function Home() {
       ),
     [ordiniOggi]
   );
-  const slotCapacity = useMemo(() => {
-    return generaSlotOrari().map((slot) => {
+  const calcolaSlotCapacity = useMemo(
+    () => (pizzeRichieste: number) =>
+      generaSlotOrari().map((slot) => {
       const ordiniSlot = ordiniAttiviPerSlot.filter((o) => o.orarioScelto === slot);
       const ordiniPrenotati = ordiniSlot.length;
       const pizzePrenotate = ordiniSlot.reduce(
@@ -760,7 +860,7 @@ export default function Home() {
       const stato = getSlotStatus(ordiniPrenotati, pizzePrenotate);
       const full = stato === "pieno";
       const nonDisponibilePerOrdine =
-        !full && (residualOrders < 1 || residualPizzas < Math.max(pizzeNelCarrello, 1));
+        !full && (residualOrders < 1 || residualPizzas < Math.max(pizzeRichieste, 1));
       const selezionabile = !full && !nonDisponibilePerOrdine;
       return {
         slot,
@@ -773,8 +873,10 @@ export default function Home() {
         nonDisponibilePerOrdine,
         selezionabile,
       };
-    });
-  }, [ordiniAttiviPerSlot, pizzeNelCarrello]);
+    }),
+    [ordiniAttiviPerSlot]
+  );
+  const slotCapacity = useMemo(() => calcolaSlotCapacity(pizzeNelCarrello), [calcolaSlotCapacity, pizzeNelCarrello]);
   const slotSummary = useMemo(
     () => ({
       disponibili: slotCapacity.filter((s) => s.stato === "disponibile").length,
@@ -797,6 +899,168 @@ export default function Home() {
     tipoOrdine === "ritiro"
       ? Boolean(orarioScelto && selectedSlotInfo?.selezionabile)
       : Boolean(indirizzoConsegnaSelezionato && orarioScelto && selectedSlotInfo?.selezionabile);
+  const manualPizzaCount = useMemo(
+    () => manualRows.reduce((acc, item) => acc + item.quantita, 0),
+    [manualRows]
+  );
+  const manualSubtotal = useMemo(
+    () =>
+      manualRows.reduce(
+        (acc, item) => acc + (item.basePrezzo + item.extra.length * EXTRA_PREZZO) * item.quantita,
+        0
+      ),
+    [manualRows]
+  );
+  const manualDeliveryCost = useMemo(
+    () => calcolaCostoConsegna(manualSubtotal, manualTipoOrdine),
+    [manualSubtotal, manualTipoOrdine]
+  );
+  const manualTotal = manualSubtotal + manualDeliveryCost;
+  const manualSlotCapacity = useMemo(() => calcolaSlotCapacity(manualPizzaCount), [calcolaSlotCapacity, manualPizzaCount]);
+  const manualSelectedSlotInfo = useMemo(
+    () => manualSlotCapacity.find((s) => s.slot === manualOrarioScelto),
+    [manualOrarioScelto, manualSlotCapacity]
+  );
+  const manualPhoneNormalized = useMemo(
+    () => normalizzaTelefono(manualCustomerPhone),
+    [manualCustomerPhone]
+  );
+  const matchedManualCustomer = useMemo(
+    () => clienti.find((c) => normalizzaTelefono(c.telefono) === manualPhoneNormalized),
+    [clienti, manualPhoneNormalized]
+  );
+  const manualPaymentOptions =
+    manualTipoOrdine === "ritiro"
+      ? PAYMENT_METHODS_RITIRO.filter((m) => m.id === "cash_at_pickup" || m.id === "card_at_pickup")
+      : PAYMENT_METHODS_CONSEGNA.filter((m) => m.id === "cash_on_delivery" || m.id === "card_on_delivery");
+  const manualPizzaSelezionata = useMemo(
+    () => MENU_PIZZE.find((pizza) => pizza.id === manualSelectedPizzaId) ?? null,
+    [manualSelectedPizzaId]
+  );
+  const clientiConApp = useMemo(() => clienti.filter((c) => c.hasApp), [clienti]);
+  const clientiSenzaApp = useMemo(() => clienti.filter((c) => !c.hasApp), [clienti]);
+  const clientiDaTelefono = useMemo(() => clienti.filter((c) => c.source === "telefono"), [clienti]);
+  const incassoDaRiscuotere = incassoContantiDaRiscuotere + incassoPosDaRiscuotere;
+  const ordiniTelefoniciOggi = useMemo(
+    () => ordiniOggi.filter((o) => o.source === "telefono"),
+    [ordiniOggi]
+  );
+  const pizzeVenduteOggi = useMemo(
+    () =>
+      ordiniOggi.reduce(
+        (acc, ordine) =>
+          acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
+        0
+      ),
+    [ordiniOggi]
+  );
+  const pizzaStats = useMemo(() => {
+    const totalePizze = Math.max(
+      ordini.reduce(
+        (acc, ordine) =>
+          acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
+        0
+      ),
+      1
+    );
+    return MENU_PIZZE.map((pizza) => {
+      const ordiniPizza = ordini.flatMap((ordine) =>
+        ordine.righe.filter((riga) => riga.pizzaId === pizza.id)
+      );
+      const quantitaVenduta = ordiniPizza.reduce((acc, riga) => acc + riga.quantita, 0);
+      const fatturato = ordiniPizza.reduce(
+        (acc, riga) => acc + (riga.basePrezzo + riga.extra.length * EXTRA_PREZZO) * riga.quantita,
+        0
+      );
+      const percentuale = (quantitaVenduta / totalePizze) * 100;
+      const badge = percentuale >= 18 ? "TOP" : percentuale >= 8 ? "MEDIA" : "BASSA";
+      return { pizza, quantitaVenduta, fatturato, percentuale, badge };
+    }).sort((a, b) => b.quantitaVenduta - a.quantitaVenduta);
+  }, [ordini]);
+  const extraStats = useMemo(() => {
+    const base = EXTRA_INGREDIENTI.map((ingrediente) => {
+      let usi = 0;
+      ordini.forEach((ordine) => {
+        ordine.righe.forEach((riga) => {
+          usi += riga.extra.filter((extra) => extra === ingrediente).length * riga.quantita;
+        });
+      });
+      return {
+        ingrediente,
+        usi,
+        ricavo: usi * EXTRA_PREZZO,
+      };
+    });
+    return base.sort((a, b) => b.usi - a.usi);
+  }, [ordini]);
+  const ingredientiPocoUsati = useMemo(
+    () => [
+      { ingrediente: "Acciughe", usi: 1, spreco: 9, suggerimento: "Valutare rimozione dal menu" },
+      { ingrediente: "Capperi", usi: 2, spreco: 6, suggerimento: "Usare solo come speciale" },
+      { ingrediente: "Gorgonzola", usi: 3, spreco: 4, suggerimento: "Valutare rimozione dal menu" },
+    ],
+    []
+  );
+  const topPizzaDelGiorno = useMemo(() => {
+    const map = new Map<string, number>();
+    ordiniOggi.forEach((ordine) =>
+      ordine.righe.forEach((riga) =>
+        map.set(riga.nome, (map.get(riga.nome) ?? 0) + riga.quantita)
+      )
+    );
+    if (!map.size) return "-";
+    return [...map.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }, [ordiniOggi]);
+  const extraPiuUsato = extraStats[0]?.ingrediente ?? "-";
+  const customerAnalytics = useMemo(() => {
+    return clienti.map((cliente) => {
+      const ordiniCliente = ordini.filter((o) => o.clienteId === cliente.id);
+      const numeroOrdini = ordiniCliente.length;
+      const totaleSpeso = ordiniCliente.reduce((acc, o) => acc + o.totaleFinale, 0);
+      const ultimoOrdineDate =
+        ordiniCliente.length > 0
+          ? ordiniCliente
+              .map((o) => new Date(o.createdAt).getTime())
+              .sort((a, b) => b - a)[0]
+          : null;
+      const ultimoOrdine = ultimoOrdineDate ? new Date(ultimoOrdineDate).toISOString() : "";
+      const scontrinoMedioCliente = numeroOrdini ? totaleSpeso / numeroOrdini : 0;
+      const recency = cliente.ultimoOrdineGiorniFa;
+      const recencyScore = getRecencyScore(recency);
+      const frequencyScore = getFrequencyScore(numeroOrdini || cliente.ordiniTotali);
+      const monetaryScore = getMonetaryScore(totaleSpeso || (cliente.ordiniTotali * 12));
+      const segmento = getRfmSegment(recencyScore, frequencyScore, monetaryScore);
+      const tags: string[] = [];
+      tags.push(cliente.hasApp ? "APP" : "SENZA APP");
+      if (cliente.source === "telefono") tags.push("TELEFONICO");
+      if ((totaleSpeso || cliente.ordiniTotali * 12) >= 120) tags.push("TOP");
+      if (cliente.ultimoOrdineGiorniFa > 20) tags.push("DORMIENTE");
+      return {
+        ...cliente,
+        numeroOrdini,
+        totaleSpeso,
+        ultimoOrdine,
+        scontrinoMedioCliente,
+        recencyScore,
+        frequencyScore,
+        monetaryScore,
+        segmento,
+        suggerimento: getRfmAction(segmento),
+        tags,
+      };
+    });
+  }, [clienti, ordini]);
+  const clientiDormienti = useMemo(
+    () => customerAnalytics.filter((c) => c.ultimoOrdineGiorniFa > 20),
+    [customerAnalytics]
+  );
+  const clientiMigliori = useMemo(
+    () =>
+      [...customerAnalytics]
+        .sort((a, b) => b.totaleSpeso - a.totaleSpeso)
+        .slice(0, 5),
+    [customerAnalytics]
+  );
 
   function simulaPagamentoOnline() {
     setOnlinePaymentSimulated(true);
@@ -852,8 +1116,20 @@ export default function Home() {
       citofonoInterno: tipoOrdine === "consegna" ? indirizzoCheckout?.citofonoInterno : undefined,
       telefonoCliente: profiloCliente.telefono,
       noteRider: tipoOrdine === "consegna" ? indirizzoCheckout?.noteConsegna : undefined,
+      source: "app",
     };
     setOrdini((prev) => [nuovoOrdine, ...prev]);
+    setClienti((prev) =>
+      prev.map((cliente) =>
+        cliente.id === "c1"
+          ? {
+              ...cliente,
+              ordiniTotali: cliente.ordiniTotali + 1,
+              ultimoOrdineGiorniFa: 0,
+            }
+          : cliente
+      )
+    );
     setCarrello([]);
     setTipoOrdine("ritiro");
     setOrarioScelto(generaSlotOrari()[0] ?? ORARI_PIZZERIA.openingTime);
@@ -978,6 +1254,165 @@ export default function Home() {
     );
     setPreferredOrderName("");
     setShowSavePreferredForm(false);
+  }
+
+  function aggiungiPizzaOrdineManuale() {
+    const pizza = manualPizzaSelezionata;
+    if (!pizza || manualPizzaQty < 1) return;
+    const nuovaRiga: RigaCarrello & { adminNote: string } = {
+      id: crypto.randomUUID(),
+      pizzaId: pizza.id,
+      nome: pizza.nome,
+      basePrezzo: pizza.prezzo,
+      extra: manualExtraSelezionati,
+      note: manualPizzaNote.trim(),
+      adminNote: manualPizzaNote.trim(),
+      quantita: manualPizzaQty,
+    };
+    setManualRows((prev) => [...prev, nuovaRiga]);
+    setManualPizzaQty(1);
+    setManualPizzaNote("");
+    setManualExtraSelezionati([]);
+  }
+
+  function aggiornaQuantitaManualRow(rowId: string, qty: number) {
+    if (qty < 1) return;
+    setManualRows((prev) =>
+      prev.map((row) => (row.id === rowId ? { ...row, quantita: qty } : row))
+    );
+  }
+
+  function removeManualRow(rowId: string) {
+    setManualRows((prev) => prev.filter((row) => row.id !== rowId));
+  }
+
+  function buildWhatsappOrderMessage(ordine: Ordine) {
+    return [
+      `Ciao ${ordine.clienteNome}, il tuo ordine ${ordine.id} e confermato!`,
+      `Tipo ordine: ${ordine.tipoOrdine === "ritiro" ? "Ritiro in pizzeria" : "Consegna a domicilio"}`,
+      `Orario: ${ordine.orarioScelto}`,
+      `Totale: ${formatEuro(ordine.totaleFinale)}`,
+      `Pagamento: ${getPaymentMethodLabel(ordine.paymentMethod)}`,
+      "",
+      "Scarica l'app PizzaFlow per i prossimi ordini:",
+      "https://pizzaflow-demo.vercel.app",
+      "La prossima volta riordini la tua pizza in 2 click.",
+    ].join("\n");
+  }
+
+  async function copiaMessaggioWhatsapp(testo: string) {
+    if (!testo) return;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(testo);
+        setManualCopied("Messaggio copiato negli appunti.");
+        return;
+      }
+      setManualCopied("Copia automatica non disponibile: seleziona e copia il testo.");
+    } catch {
+      setManualCopied("Copia automatica non disponibile: seleziona e copia il testo.");
+    }
+  }
+
+  function apriWhatsapp(phone: string, testo: string) {
+    const phoneClean = normalizzaTelefono(phone);
+    if (!phoneClean) return;
+    const url = `https://wa.me/${phoneClean}?text=${encodeURIComponent(testo)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function buildMarketingMessage(template: "app" | "riattivazione" | "secondo-ordine", nome: string) {
+    if (template === "app") {
+      return `Ciao ${nome}, dalla prossima volta puoi ordinare la tua pizza in 2 click dalla nostra app: https://pizzaflow-demo.vercel.app`;
+    }
+    if (template === "riattivazione") {
+      return `Ciao ${nome}, e da un po' che non ordini. Questa settimana abbiamo riservato un piccolo omaggio per te.`;
+    }
+    return `Ciao ${nome}, riordina la tua solita pizza dall'app entro 7 giorni e ricevi un extra omaggio.`;
+  }
+
+  function resetManualOrderForm() {
+    setManualCustomerName("");
+    setManualCustomerPhone("");
+    setManualCustomerEmail("");
+    setManualTipoOrdine("ritiro");
+    setManualAddress("");
+    setManualCitofono("");
+    setManualDeliveryNotes("");
+    setManualOrarioScelto(generaSlotOrari()[0] ?? ORARI_PIZZERIA.openingTime);
+    setManualPaymentMethod("cash_at_pickup");
+    setManualRows([]);
+    setManualSelectedPizzaId(MENU_PIZZE[0]?.id ?? "");
+    setManualExtraSelezionati([]);
+    setManualPizzaQty(1);
+    setManualPizzaNote("");
+  }
+
+  function creaOrdineTelefonico() {
+    if (!manualCustomerName.trim() || !manualPhoneNormalized || manualRows.length === 0) return;
+    if (!manualSelectedSlotInfo?.selezionabile) return;
+    if (
+      manualTipoOrdine === "consegna" &&
+      (!manualAddress.trim() || !manualCitofono.trim())
+    ) {
+      return;
+    }
+    const paymentDetails = resolvePaymentForMethod(manualPaymentMethod);
+    const now = new Date();
+    const existingCustomer = matchedManualCustomer;
+    const customerId = existingCustomer?.id ?? `c-${crypto.randomUUID().slice(0, 8)}`;
+    const nuovoOrdine: Ordine = {
+      id: `PF-${2000 + ordini.length + 1}`,
+      clienteId: customerId,
+      clienteNome: manualCustomerName.trim(),
+      orderDate: getTodayOrderDate(),
+      createdAt: now.toISOString(),
+      dataISO: now.toISOString(),
+      tipoOrdine: manualTipoOrdine,
+      orarioScelto: manualOrarioScelto,
+      stato: "ricevuto",
+      righe: manualRows,
+      costoConsegna: manualDeliveryCost,
+      totaleFinale: manualTotal,
+      paymentMethod: paymentDetails.paymentMethod,
+      paymentStatus: paymentDetails.paymentStatus,
+      needsPos: paymentDetails.needsPos,
+      indirizzo: manualTipoOrdine === "consegna" ? manualAddress.trim() : undefined,
+      citofonoInterno: manualTipoOrdine === "consegna" ? manualCitofono.trim() : undefined,
+      noteRider: manualTipoOrdine === "consegna" ? manualDeliveryNotes.trim() : undefined,
+      telefonoCliente: manualCustomerPhone.trim(),
+      source: "telefono",
+    };
+    setOrdini((prev) => [nuovoOrdine, ...prev]);
+    setClienti((prev) => {
+      if (existingCustomer) {
+        return prev.map((c) =>
+          c.id === existingCustomer.id
+            ? { ...c, nome: manualCustomerName.trim(), email: manualCustomerEmail.trim() || c.email, ordiniTotali: c.ordiniTotali + 1, ultimoOrdineGiorniFa: 0 }
+            : c
+        );
+      }
+      return [
+        {
+          id: customerId,
+          nome: manualCustomerName.trim(),
+          telefono: manualCustomerPhone.trim(),
+          email: manualCustomerEmail.trim() || undefined,
+          ordiniTotali: 1,
+          ultimoOrdineGiorniFa: 0,
+          preferenzaWeekend: false,
+          hasApp: false,
+          source: "telefono",
+        },
+        ...prev,
+      ];
+    });
+    const message = buildWhatsappOrderMessage(nuovoOrdine);
+    setManualWhatsappMessage(message);
+    setManualWhatsappPhone(manualCustomerPhone.trim());
+    setManualCopied("");
+    setManualOrderNotice("Ordine telefonico creato: visibile in dashboard, kanban e capacità slot.");
+    resetManualOrderForm();
   }
 
   useEffect(() => {
@@ -1625,16 +2060,30 @@ export default function Home() {
 
           {view === "admin" && (
             <div className="space-y-5">
-              <div className="grid grid-cols-2 gap-3">
-                <MetricCard titolo="Ordini oggi" valore={String(ordiniOggi.length)} />
-                <MetricCard titolo="Fatturato demo" valore={formatEuro(fatturatoDemo)} />
-                <MetricCard titolo="Clienti attivi" valore={String(clientiAttivi)} />
-                <MetricCard titolo="Scontrino medio" valore={formatEuro(scontrinoMedio)} />
-                <MetricCard titolo="Incasso online simulato" valore={formatEuro(incassoOnlineSimulato)} />
-                <MetricCard titolo="Da riscuotere (contanti)" valore={formatEuro(incassoContantiDaRiscuotere)} />
-                <MetricCard titolo="Da riscuotere (POS)" valore={formatEuro(incassoPosDaRiscuotere)} />
-                <MetricCard titolo="Ordini con POS" valore={String(ordiniCheRichiedonoPos)} />
+              <div className="overflow-x-auto rounded-2xl border border-[#f0d7c7] bg-white p-1">
+                <div className="flex min-w-max gap-2">
+                  <button onClick={() => setAdminTab("dashboard")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "dashboard" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Dashboard</button>
+                  <button onClick={() => setAdminTab("ordini")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "ordini" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Ordini</button>
+                  <button onClick={() => setAdminTab("ordine-telefonico")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "ordine-telefonico" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Ordine telefonico</button>
+                  <button onClick={() => setAdminTab("crm")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "crm" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>CRM</button>
+                  <button onClick={() => setAdminTab("rfm")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "rfm" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>RFM</button>
+                  <button onClick={() => setAdminTab("prodotti")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "prodotti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Prodotti</button>
+                  <button onClick={() => setAdminTab("marketing")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "marketing" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Marketing</button>
+                </div>
               </div>
+
+              {adminTab === "ordini" && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <MetricCard titolo="Ordini oggi" valore={String(ordiniOggi.length)} />
+                    <MetricCard titolo="Fatturato demo" valore={formatEuro(fatturatoDemo)} />
+                    <MetricCard titolo="Clienti attivi" valore={String(clientiAttivi)} />
+                    <MetricCard titolo="Scontrino medio" valore={formatEuro(scontrinoMedio)} />
+                    <MetricCard titolo="Incasso online simulato" valore={formatEuro(incassoOnlineSimulato)} />
+                    <MetricCard titolo="Da riscuotere (contanti)" valore={formatEuro(incassoContantiDaRiscuotere)} />
+                    <MetricCard titolo="Da riscuotere (POS)" valore={formatEuro(incassoPosDaRiscuotere)} />
+                    <MetricCard titolo="Ordini con POS" valore={String(ordiniCheRichiedonoPos)} />
+                  </div>
 
               <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
                 <h2 className="font-semibold">Impostazioni orari</h2>
@@ -1794,6 +2243,15 @@ export default function Home() {
                                 <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${ordine.tipoOrdine === "ritiro" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>
                                   {ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}
                                 </span>
+                                <span
+                                  className={`rounded-full px-2 py-1 text-[10px] font-bold ${
+                                    ordine.source === "telefono"
+                                      ? "bg-orange-100 text-orange-800"
+                                      : "bg-emerald-100 text-emerald-800"
+                                  }`}
+                                >
+                                  {ordine.source === "telefono" ? "TELEFONICO" : "APP"}
+                                </span>
                                 <span className="text-[10px] text-[#82513a]">Orario richiesto: {ordine.orarioScelto}</span>
                               </div>
                               <div className="mt-2 flex flex-wrap gap-1">
@@ -1821,6 +2279,19 @@ export default function Home() {
                               <p className="mt-1 text-[10px] text-[#6d4331]">
                                 Pagamento: {getPaymentMethodLabel(ordine.paymentMethod)} - {getPaymentStatusLabel(ordine.paymentStatus)}
                               </p>
+                              <div className="mt-2 space-y-1 rounded-lg bg-[#fff7f0] p-2">
+                                {ordine.righe.map((riga) => {
+                                  const prezzoUnitario = riga.basePrezzo + riga.extra.length * EXTRA_PREZZO;
+                                  return (
+                                    <div key={`${ordine.id}-${riga.id}`} className="text-[10px] text-[#6d4331]">
+                                      <p className="font-semibold">{riga.quantita}x {riga.nome}</p>
+                                      <p>Unitario: {formatEuro(prezzoUnitario)} - Totale: {formatEuro(prezzoUnitario * riga.quantita)}</p>
+                                      {riga.extra.length > 0 && <p>Extra: {riga.extra.join(", ")}</p>}
+                                      {riga.note && <p>Note: {riga.note}</p>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
                               <p className="mt-1 text-[10px] text-[#6d4331]">Ricevuto alle {formatItalianTime(ordine.createdAt)}</p>
                               {ordine.tipoOrdine === "consegna" && ordine.indirizzo && (
                                 <>
@@ -1835,6 +2306,11 @@ export default function Home() {
                               <p className="mt-1 text-[10px] text-[#6d4331]">
                                 Stato attuale: <span className="font-semibold">{ordine.stato}</span>
                               </p>
+                              {!clienti.find((c) => c.id === ordine.clienteId)?.hasApp && (
+                                <span className="mt-2 inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-800">
+                                  SENZA APP
+                                </span>
+                              )}
                               <button
                                 onClick={() => avanzaStatoOrdine(ordine.id)}
                                 disabled={ordine.stato === (ordine.tipoOrdine === "ritiro" ? "ritirato" : "consegnato")}
@@ -1851,33 +2327,334 @@ export default function Home() {
                   })}
                 </div>
               </section>
+                </>
+              )}
 
-              <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
-                <h2 className="font-semibold">Clienti demo</h2>
-                <div className="mt-2 space-y-2 text-sm">
-                  {CLIENTI_DEMO.map((cliente) => (
-                    <p key={cliente.id}>{cliente.nome} - {cliente.telefono}</p>
-                  ))}
-                </div>
-              </section>
+              {adminTab === "ordine-telefonico" && (
+                <section className="space-y-3 rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                  <h2 className="font-semibold">Inserimento ordine manuale</h2>
+                  <div className="space-y-2 rounded-xl bg-[#fff7f0] p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#9a715c]">Cliente</p>
+                    <input value={manualCustomerName} onChange={(e) => setManualCustomerName(e.target.value)} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Nome cliente" />
+                    <input value={manualCustomerPhone} onChange={(e) => setManualCustomerPhone(e.target.value)} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Telefono cliente" />
+                    <input value={manualCustomerEmail} onChange={(e) => setManualCustomerEmail(e.target.value)} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Email opzionale" />
+                    {manualPhoneNormalized.length > 5 && (
+                      <p className="rounded-lg bg-white p-2 text-xs font-semibold text-[#6d4331]">
+                        {matchedManualCustomer ? "Cliente gia presente" : "Nuovo cliente: verra aggiunto al database demo"}
+                      </p>
+                    )}
+                  </div>
 
-              <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
-                <h2 className="font-semibold">Marketing intelligente</h2>
-                <div className="mt-3 space-y-2 text-sm text-[#6d4331]">
-                  <p>Migliori clienti: {CLIENTI_DEMO.filter((c) => c.ordiniTotali >= 10).map((c) => c.nome).join(", ")}</p>
-                  <p>Clienti dormienti: {CLIENTI_DEMO.filter((c) => c.ultimoOrdineGiorniFa > 20).map((c) => c.nome).join(", ")}</p>
-                  <p>Clienti del weekend: {CLIENTI_DEMO.filter((c) => c.preferenzaWeekend).map((c) => c.nome).join(", ")}</p>
-                  <p>Clienti da secondo ordine: {CLIENTI_DEMO.filter((c) => c.ordiniTotali === 1).map((c) => c.nome).join(", ")}</p>
-                </div>
-              </section>
+                  <div className="rounded-xl bg-[#fff7f0] p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#9a715c]">Tipo ordine</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <button onClick={() => { setManualTipoOrdine("ritiro"); setManualPaymentMethod("cash_at_pickup"); }} className={`rounded-xl border py-3 text-sm font-semibold ${manualTipoOrdine === "ritiro" ? "border-[#8f3b18] bg-[#f4dfd0]" : "border-[#ecc8b1] bg-white"}`}>Ritiro in pizzeria</button>
+                      <button onClick={() => { setManualTipoOrdine("consegna"); setManualPaymentMethod("cash_on_delivery"); }} className={`rounded-xl border py-3 text-sm font-semibold ${manualTipoOrdine === "consegna" ? "border-[#8f3b18] bg-[#f4dfd0]" : "border-[#ecc8b1] bg-white"}`}>Consegna a domicilio</button>
+                    </div>
+                    {manualTipoOrdine === "consegna" && (
+                      <div className="mt-3 space-y-2">
+                        <input value={manualAddress} onChange={(e) => setManualAddress(e.target.value)} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Indirizzo" />
+                        <input value={manualCitofono} onChange={(e) => setManualCitofono(e.target.value)} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Citofono / interno" />
+                        <textarea value={manualDeliveryNotes} onChange={(e) => setManualDeliveryNotes(e.target.value)} className="h-20 w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Note consegna" />
+                      </div>
+                    )}
+                  </div>
 
-              <section className="rounded-2xl border border-[#e9d7c9] bg-[#fff7f0] p-4 text-sm text-[#6d4331]">
-                <h2 className="font-semibold">Demo automazione</h2>
-                <p className="mt-2">
-                  Nella versione reale gli stati possono avanzare manualmente, oppure in automatico in base all&apos;orario di
-                  ritiro/consegna e ai tempi medi di preparazione.
-                </p>
-              </section>
+                  <div className="rounded-xl bg-[#fff7f0] p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#9a715c]">Orario</p>
+                    <div className="mt-2 space-y-2">
+                      {manualSlotCapacity.map((slot) => (
+                        <button key={`manual-${slot.slot}`} onClick={() => slot.selezionabile && setManualOrarioScelto(slot.slot)} disabled={!slot.selezionabile} className={`w-full rounded-xl border p-3 text-left text-xs ${manualOrarioScelto === slot.slot ? "border-[#8f3b18] bg-[#f4dfd0]" : "border-[#ecc8b1] bg-white"} disabled:opacity-50`}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold">{slot.slot}</span>
+                            <span className="font-semibold">{slot.stato === "disponibile" ? "Disponibile" : slot.stato === "quasi pieno" ? "Quasi pieno" : "Pieno"}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 rounded-xl bg-[#fff7f0] p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#9a715c]">Prodotti</p>
+                    <select value={manualSelectedPizzaId} onChange={(e) => setManualSelectedPizzaId(e.target.value)} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm">
+                      {MENU_PIZZE.map((pizza) => (
+                        <option key={pizza.id} value={pizza.id}>{pizza.nome} - {formatEuro(pizza.prezzo)}</option>
+                      ))}
+                    </select>
+                    {manualPizzaSelezionata && (
+                      <div className="rounded-xl border border-[#ecd7c8] bg-white p-3 text-xs text-[#6d4331]">
+                        <p className="text-sm font-semibold text-[#3a1f12]">{manualPizzaSelezionata.nome}</p>
+                        <p>Prezzo unitario: {formatEuro(manualPizzaSelezionata.prezzo)}</p>
+                        <p>Ingredienti base: {manualPizzaSelezionata.ingredienti.join(", ")}</p>
+                        <p className="mt-2 font-semibold text-[#3a1f12]">Extra disponibili</p>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {EXTRA_INGREDIENTI.map((extra) => (
+                            <button
+                              key={`manual-extra-${extra}`}
+                              onClick={() =>
+                                setManualExtraSelezionati((prev) =>
+                                  prev.includes(extra) ? prev.filter((item) => item !== extra) : [...prev, extra]
+                                )
+                              }
+                              className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${
+                                manualExtraSelezionati.includes(extra)
+                                  ? "border-[#8f3b18] bg-[#f4dfd0] text-[#8f3b18]"
+                                  : "border-[#ecc8b1] bg-white text-[#82513a]"
+                              }`}
+                            >
+                              {extra} (+{formatEuro(EXTRA_PREZZO)})
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <input type="number" min={1} value={manualPizzaQty} onChange={(e) => setManualPizzaQty(Math.max(1, Number(e.target.value) || 1))} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Quantita" />
+                    <textarea value={manualPizzaNote} onChange={(e) => setManualPizzaNote(e.target.value)} className="h-20 w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Note pizza" />
+                    <button onClick={aggiungiPizzaOrdineManuale} className="w-full rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white">Aggiungi pizza all&apos;ordine</button>
+                    {manualRows.map((row) => (
+                      <article key={row.id} className="rounded-xl border border-[#ecd7c8] bg-white p-3 text-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold">{row.quantita}x {row.nome}</p>
+                          <p className="font-semibold">{formatEuro((row.basePrezzo + row.extra.length * EXTRA_PREZZO) * row.quantita)}</p>
+                        </div>
+                        <p className="mt-1 text-xs text-[#6d4331]">Prezzo unitario: {formatEuro(row.basePrezzo + row.extra.length * EXTRA_PREZZO)}</p>
+                        <p className="text-xs font-semibold text-[#6d4331]">Totale riga: {formatEuro((row.basePrezzo + row.extra.length * EXTRA_PREZZO) * row.quantita)}</p>
+                        <div className="mt-2 flex items-center gap-2">
+                          <input type="number" min={1} value={row.quantita} onChange={(e) => aggiornaQuantitaManualRow(row.id, Math.max(1, Number(e.target.value) || 1))} className="w-20 rounded-lg border border-[#ecc8b1] p-2 text-xs" />
+                          <button onClick={() => removeManualRow(row.id)} className="rounded-lg border border-[#d9b7a3] px-3 py-2 text-xs font-semibold text-[#8f3b18]">Rimuovi</button>
+                        </div>
+                        {row.extra.length > 0 && <p className="mt-1 text-xs text-[#6d4331]">Extra: {row.extra.join(", ")}</p>}
+                        {row.adminNote && <p className="mt-1 text-xs text-[#6d4331]">Note: {row.adminNote}</p>}
+                      </article>
+                    ))}
+                    <p className="rounded-lg bg-white p-2 text-sm font-semibold text-[#6d4331]">Totale ordine: {formatEuro(manualTotal)}</p>
+                  </div>
+
+                  <div className="space-y-2 rounded-xl bg-[#fff7f0] p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#9a715c]">Pagamento</p>
+                    {manualPaymentOptions.map((option) => (
+                      <button key={option.id} onClick={() => setManualPaymentMethod(option.id)} className={`w-full rounded-xl border p-3 text-left text-sm font-semibold ${manualPaymentMethod === option.id ? "border-[#8f3b18] bg-[#f4dfd0]" : "border-[#ecc8b1] bg-white"}`}>
+                        {option.label}
+                      </button>
+                    ))}
+                    {manualTipoOrdine === "consegna" && manualPaymentMethod === "card_on_delivery" && (
+                      <span className="inline-flex rounded-full bg-amber-200 px-3 py-1 text-xs font-bold text-amber-900">
+                        PORTARE POS
+                      </span>
+                    )}
+                  </div>
+
+                  <button onClick={creaOrdineTelefonico} disabled={!manualSelectedSlotInfo?.selezionabile || manualRows.length === 0} className="w-full rounded-2xl bg-[#8f3b18] py-4 text-base font-bold text-white disabled:opacity-50">
+                    Crea ordine telefonico
+                  </button>
+                  {manualOrderNotice && <p className="rounded-xl bg-[#f4dfd0] p-3 text-sm text-[#6d4331]">{manualOrderNotice}</p>}
+
+                  {manualWhatsappMessage && (
+                    <div className="space-y-2 rounded-xl border border-[#dcb39a] bg-[#fff1e8] p-3">
+                      <p className="text-sm font-bold text-[#8f3b18]">Messaggio WhatsApp pronto</p>
+                      <textarea value={manualWhatsappMessage} readOnly className="h-40 w-full rounded-xl border border-[#ecc8b1] bg-white p-3 text-xs" />
+                      <div className="grid grid-cols-2 gap-2">
+                        <button onClick={() => copiaMessaggioWhatsapp(manualWhatsappMessage)} className="rounded-xl border border-[#d59e7d] bg-white py-3 text-xs font-semibold text-[#8f3b18]">Copia messaggio WhatsApp</button>
+                        <button onClick={() => apriWhatsapp(manualWhatsappPhone, manualWhatsappMessage)} className="rounded-xl bg-[#25D366] py-3 text-xs font-semibold text-white">Apri WhatsApp</button>
+                      </div>
+                      {manualCopied && <p className="text-xs text-[#6d4331]">{manualCopied}</p>}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {adminTab === "crm" && (
+                <>
+                  <section className="grid grid-cols-2 gap-3">
+                    <MetricCard titolo="Clienti totali" valore={String(clienti.length)} />
+                    <MetricCard titolo="Clienti con app" valore={String(clientiConApp.length)} />
+                    <MetricCard titolo="Clienti senza app" valore={String(clientiSenzaApp.length)} />
+                    <MetricCard titolo="Acquisiti da telefono" valore={String(clientiDaTelefono.length)} />
+                    <MetricCard titolo="Clienti da convertire" valore={String(clientiSenzaApp.length)} />
+                    <MetricCard titolo="Clienti dormienti" valore={String(clientiDormienti.length)} />
+                    <MetricCard titolo="Clienti migliori" valore={String(clientiMigliori.length)} />
+                  </section>
+
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <h2 className="font-semibold">Lista clienti CRM</h2>
+                    <div className="mt-3 space-y-2">
+                      {customerAnalytics.map((cliente) => (
+                        <article key={`conv-${cliente.id}`} className="rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-3">
+                          <p className="text-sm font-semibold">{cliente.nome}</p>
+                          <p className="text-xs text-[#6d4331]">{cliente.telefono}</p>
+                          {cliente.email && <p className="text-xs text-[#6d4331]">{cliente.email}</p>}
+                          <p className="text-xs text-[#6d4331]">Ordini: {cliente.numeroOrdini} - Totale speso: {formatEuro(cliente.totaleSpeso)}</p>
+                          <p className="text-xs text-[#6d4331]">Scontrino medio: {formatEuro(cliente.scontrinoMedioCliente)}</p>
+                          <p className="text-xs text-[#6d4331]">Ultimo ordine: {cliente.ultimoOrdine ? formatItalianDate(cliente.ultimoOrdine.slice(0, 10)) : "N/D"}</p>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {cliente.tags.map((tag) => (
+                              <span key={`${cliente.id}-${tag}`} className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-[#6d4331]">{tag}</span>
+                            ))}
+                          </div>
+                          <div className="mt-3 grid grid-cols-1 gap-2">
+                            <button onClick={() => { const msg = buildMarketingMessage("app", cliente.nome); setCrmPromoNotice(msg); copiaMessaggioWhatsapp(msg); }} className="w-full rounded-xl border border-[#d59e7d] bg-white py-2 text-xs font-semibold text-[#8f3b18]">Invia promo scarica app</button>
+                            <button onClick={() => { const msg = buildMarketingMessage("riattivazione", cliente.nome); setCrmPromoNotice(msg); copiaMessaggioWhatsapp(msg); }} className="w-full rounded-xl border border-[#d59e7d] bg-white py-2 text-xs font-semibold text-[#8f3b18]">Invia promo riattivazione</button>
+                            <button onClick={() => { const msg = `Ciao ${cliente.nome}, grazie per essere un cliente fedele: abbiamo un vantaggio esclusivo per te.`; setCrmPromoNotice(msg); copiaMessaggioWhatsapp(msg); }} className="w-full rounded-xl border border-[#d59e7d] bg-white py-2 text-xs font-semibold text-[#8f3b18]">Premia cliente fedele</button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                    {crmPromoNotice && <p className="mt-3 rounded-xl bg-[#f4dfd0] p-3 text-xs text-[#6d4331]">{crmPromoNotice}</p>}
+                  </section>
+
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <h2 className="font-semibold">Clienti demo</h2>
+                    <div className="mt-2 space-y-2 text-sm">
+                      {clienti.map((cliente) => (
+                        <div key={cliente.id} className="rounded-xl bg-[#fffaf6] p-3">
+                          <p className="font-semibold">{cliente.nome} - {cliente.telefono}</p>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${cliente.hasApp ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>
+                              {cliente.hasApp ? "APP" : "SENZA APP"}
+                            </span>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${cliente.source === "telefono" ? "bg-orange-100 text-orange-800" : "bg-sky-100 text-sky-800"}`}>
+                              {cliente.source === "telefono" ? "TELEFONICO" : "APP"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
+
+              {adminTab === "rfm" && (
+                <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                  <h2 className="font-semibold">Matrice RFM</h2>
+                  <p className="mt-1 text-xs text-[#6d4331]">R = Recency, F = Frequency, M = Monetary</p>
+                  <div className="mt-3 space-y-2">
+                    {customerAnalytics.map((cliente) => (
+                      <article key={`rfm-${cliente.id}`} className="rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-3 text-xs">
+                        <div className="flex items-center justify-between">
+                          <p className="font-semibold text-sm">{cliente.nome}</p>
+                          <span className="rounded-full bg-[#f4dfd0] px-2 py-0.5 text-[10px] font-bold text-[#8f3b18]">{cliente.segmento}</span>
+                        </div>
+                        <p>R:{cliente.recencyScore} F:{cliente.frequencyScore} M:{cliente.monetaryScore}</p>
+                        <p className="text-[#6d4331]">{cliente.suggerimento}</p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {adminTab === "prodotti" && (
+                <>
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <h2 className="font-semibold">Pizze più vendute</h2>
+                    <div className="mt-2 space-y-2 text-sm">
+                      {pizzaStats.map((item) => (
+                        <article key={item.pizza.id} className="rounded-xl bg-[#fffaf6] p-3">
+                          <div className="flex items-center justify-between">
+                            <p className="font-semibold">{item.pizza.nome}</p>
+                            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold">{item.badge}</span>
+                          </div>
+                          <p className="text-xs text-[#6d4331]">Quantita venduta: {item.quantitaVenduta}</p>
+                          <p className="text-xs text-[#6d4331]">Fatturato: {formatEuro(item.fatturato)}</p>
+                          <p className="text-xs text-[#6d4331]">Percentuale vendite: {item.percentuale.toFixed(1)}%</p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <h2 className="font-semibold">Ingredienti extra più usati</h2>
+                    <div className="mt-2 space-y-2 text-sm">
+                      {extraStats.map((item) => (
+                        <article key={item.ingrediente} className="rounded-xl bg-[#fffaf6] p-3">
+                          <p className="font-semibold">{item.ingrediente}</p>
+                          <p className="text-xs text-[#6d4331]">Volte usato: {item.usi}</p>
+                          <p className="text-xs text-[#6d4331]">Ricavo extra: {formatEuro(item.ricavo)}</p>
+                          <p className="text-xs font-semibold text-emerald-700">Da tenere sempre disponibile</p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <h2 className="font-semibold">Ingredienti poco usati / possibili sprechi</h2>
+                    <div className="mt-2 space-y-2 text-sm">
+                      {ingredientiPocoUsati.map((item) => (
+                        <article key={item.ingrediente} className="rounded-xl bg-[#fffaf6] p-3">
+                          <p className="font-semibold">{item.ingrediente}</p>
+                          <p className="text-xs text-[#6d4331]">Volte usato: {item.usi}</p>
+                          <p className="text-xs text-[#6d4331]">Costo/spreco stimato: {formatEuro(item.spreco)}</p>
+                          <p className="text-xs font-semibold text-amber-800">{item.suggerimento}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
+
+              {adminTab === "marketing" && (
+                <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                  <h2 className="font-semibold">Marketing operativo</h2>
+                  <div className="mt-3 space-y-3">
+                    {[
+                      { titolo: "Clienti senza app da convertire", gruppo: customerAnalytics.filter((c) => !c.hasApp), obiettivo: "Conversione app", template: "app" as const },
+                      { titolo: "Clienti dormienti", gruppo: customerAnalytics.filter((c) => c.ultimoOrdineGiorniFa > 20), obiettivo: "Riattivazione", template: "riattivazione" as const },
+                      { titolo: "Clienti weekend da spingere in settimana", gruppo: customerAnalytics.filter((c) => c.preferenzaWeekend), obiettivo: "Bilanciare domanda", template: "riattivazione" as const },
+                      { titolo: "Clienti da secondo ordine", gruppo: customerAnalytics.filter((c) => c.numeroOrdini <= 1), obiettivo: "Aumentare frequenza", template: "secondo-ordine" as const },
+                      { titolo: "Clienti top da premiare", gruppo: clientiMigliori, obiettivo: "Retention premium", template: "app" as const },
+                    ].map((item) => (
+                      <article key={item.titolo} className="rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-3 text-xs">
+                        <p className="font-semibold text-sm">{item.titolo}</p>
+                        <p>Numero clienti: {item.gruppo.length}</p>
+                        <p>Obiettivo: {item.obiettivo}</p>
+                        <p className="mt-1 text-[#6d4331]">{buildMarketingMessage(item.template, "{nome}")}</p>
+                        <button
+                          onClick={() => {
+                            const nome = item.gruppo[0]?.nome ?? "cliente";
+                            const message = buildMarketingMessage(item.template, nome);
+                            setMarketingMessageNotice(message);
+                            copiaMessaggioWhatsapp(message);
+                          }}
+                          className="mt-2 w-full rounded-xl border border-[#d59e7d] bg-white py-2 text-xs font-semibold text-[#8f3b18]"
+                        >
+                          Copia messaggio WhatsApp
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                  {marketingMessageNotice && <p className="mt-3 rounded-xl bg-[#f4dfd0] p-3 text-xs text-[#6d4331]">{marketingMessageNotice}</p>}
+                </section>
+              )}
+              {adminTab === "dashboard" && (
+                <>
+                  <section className="grid grid-cols-2 gap-3">
+                    <MetricCard titolo="Ordini oggi" valore={String(ordiniOggi.length)} />
+                    <MetricCard titolo="Fatturato oggi" valore={formatEuro(fatturatoDemo)} />
+                    <MetricCard titolo="Scontrino medio" valore={formatEuro(scontrinoMedio)} />
+                    <MetricCard titolo="Pizze vendute oggi" valore={String(pizzeVenduteOggi)} />
+                    <MetricCard titolo="Clienti con app" valore={String(clientiConApp.length)} />
+                    <MetricCard titolo="Clienti senza app" valore={String(clientiSenzaApp.length)} />
+                    <MetricCard titolo="Slot pieni" valore={String(slotSummary.pieni)} />
+                    <MetricCard titolo="Ordini telefonici" valore={String(ordiniTelefoniciOggi.length)} />
+                    <MetricCard titolo="Incasso online demo" valore={formatEuro(incassoOnlineSimulato)} />
+                    <MetricCard titolo="Incasso da riscuotere" valore={formatEuro(incassoDaRiscuotere)} />
+                    <MetricCard titolo="Top pizza del giorno" valore={topPizzaDelGiorno} />
+                    <MetricCard titolo="Extra più usato" valore={extraPiuUsato} />
+                  </section>
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <h2 className="font-semibold">Classifica clienti migliori</h2>
+                    <p className="mt-1 text-xs text-[#6d4331]">Questi clienti non vanno bombardati di sconti: meglio premi esclusivi e vantaggi app.</p>
+                    <div className="mt-3 space-y-2">
+                      {clientiMigliori.map((cliente) => (
+                        <article key={`top-${cliente.id}`} className="rounded-xl bg-[#fffaf6] p-3 text-xs">
+                          <p className="font-semibold text-sm">{cliente.nome}</p>
+                          <p>Totale speso: {formatEuro(cliente.totaleSpeso)}</p>
+                          <p>Numero ordini: {cliente.numeroOrdini}</p>
+                          <p>Ultimo ordine: {cliente.ultimoOrdine ? formatItalianDate(cliente.ultimoOrdine.slice(0, 10)) : "N/D"}</p>
+                          <p>Scontrino medio: {formatEuro(cliente.scontrinoMedioCliente)}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
             </div>
           )}
         </section>
