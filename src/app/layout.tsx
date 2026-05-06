@@ -13,8 +13,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PizzaFlow Demo",
-  description: "Demo mobile-first per pizzeria da asporto",
+  title: "PizzaFlow",
+  description: "La tua pizza in 2 click",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/pizzaflow-icon.png.png",
+    apple: "/pizzaflow-icon.png.png",
+  },
 };
 
 export default function RootLayout({
