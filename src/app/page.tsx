@@ -148,7 +148,14 @@ type Cliente = {
   source: CustomerSource;
 };
 
-const EXTRA_PREZZO = 1.5;
+const EXTRA_PREZZI: Record<string, number> = {
+  Burrata: 2.5,
+  Nduja: 1.5,
+  "Funghi porcini": 2,
+  "Olive taggiasche": 1.5,
+  "Cipolla caramellata": 1,
+  "Doppia mozzarella": 1.5,
+};
 const ORARI_PIZZERIA = {
   openingTime: "18:30",
   closingTime: "22:30",
@@ -423,6 +430,14 @@ const PROFILO_CLIENTE_DEMO: ProfiloClienteDemo = {
 
 function formatEuro(value: number) {
   return `EUR ${value.toFixed(2)}`;
+}
+
+function getExtraPrezzo(extra: string) {
+  return EXTRA_PREZZI[extra] ?? 0;
+}
+
+function getTotaleExtra(extra: string[]) {
+  return extra.reduce((acc, item) => acc + getExtraPrezzo(item), 0);
 }
 
 function normalizzaTelefono(telefono: string) {
@@ -783,7 +798,7 @@ export default function Home() {
   const totaleCarrello = useMemo(
     () =>
       carrello.reduce(
-        (acc, item) => acc + (item.basePrezzo + item.extra.length * EXTRA_PREZZO) * item.quantita,
+        (acc, item) => acc + (item.basePrezzo + getTotaleExtra(item.extra)) * item.quantita,
         0
       ),
     [carrello]
@@ -1057,7 +1072,7 @@ export default function Home() {
   const manualSubtotal = useMemo(
     () =>
       manualRows.reduce(
-        (acc, item) => acc + (item.basePrezzo + item.extra.length * EXTRA_PREZZO) * item.quantita,
+        (acc, item) => acc + (item.basePrezzo + getTotaleExtra(item.extra)) * item.quantita,
         0
       ),
     [manualRows]
@@ -1125,7 +1140,7 @@ export default function Home() {
       );
       const quantitaVenduta = ordiniPizza.reduce((acc, riga) => acc + riga.quantita, 0);
       const fatturato = ordiniPizza.reduce(
-        (acc, riga) => acc + (riga.basePrezzo + riga.extra.length * EXTRA_PREZZO) * riga.quantita,
+        (acc, riga) => acc + (riga.basePrezzo + getTotaleExtra(riga.extra)) * riga.quantita,
         0
       );
       const percentuale = (quantitaVenduta / totalePizze) * 100;
@@ -1133,29 +1148,94 @@ export default function Home() {
       return { pizza, quantitaVenduta, fatturato, percentuale, badge };
     }).sort((a, b) => b.quantitaVenduta - a.quantitaVenduta);
   }, [ordini]);
-  const extraStats = useMemo(() => {
-    const base = EXTRA_INGREDIENTI.map((ingrediente) => {
-      let usi = 0;
-      ordini.forEach((ordine) => {
-        ordine.righe.forEach((riga) => {
-          usi += riga.extra.filter((extra) => extra === ingrediente).length * riga.quantita;
+  const ingredientiRealiSistema = useMemo(() => {
+    const ingredientiMenu = MENU_PIZZE.flatMap((pizza) => pizza.ingredienti);
+    return Array.from(new Set([...ingredientiMenu, ...EXTRA_INGREDIENTI]));
+  }, []);
+  const ingredientUsageStats = useMemo(() => {
+    const ingredientiSet = new Set(ingredientiRealiSistema);
+    const pizzaById = new Map(MENU_PIZZE.map((pizza) => [pizza.id, pizza]));
+    const usage = new Map<
+      string,
+      { usi: number; extraUsi: number; ricavoExtra: number; rimossi: number; isExtra: boolean }
+    >();
+    ingredientiRealiSistema.forEach((ingrediente) =>
+      usage.set(ingrediente, {
+        usi: 0,
+        extraUsi: 0,
+        ricavoExtra: 0,
+        rimossi: 0,
+        isExtra: EXTRA_INGREDIENTI.includes(ingrediente),
+      })
+    );
+    ordini.forEach((ordine) => {
+      ordine.righe.forEach((riga) => {
+        const pizza = pizzaById.get(riga.pizzaId);
+        pizza?.ingredienti.forEach((ingrediente) => {
+          if (!ingredientiSet.has(ingrediente)) return;
+          const item = usage.get(ingrediente);
+          if (!item) return;
+          item.usi += riga.quantita;
+        });
+        riga.extra.forEach((extra) => {
+          if (!ingredientiSet.has(extra)) return;
+          const item = usage.get(extra);
+          if (!item) return;
+          item.usi += riga.quantita;
+          item.extraUsi += riga.quantita;
+          item.ricavoExtra += getExtraPrezzo(extra) * riga.quantita;
+        });
+        (riga.ingredientiRimossi ?? []).forEach((ingredienteRimosso) => {
+          if (!ingredientiSet.has(ingredienteRimosso)) return;
+          const item = usage.get(ingredienteRimosso);
+          if (!item) return;
+          item.rimossi += riga.quantita;
         });
       });
-      return {
-        ingrediente,
-        usi,
-        ricavo: usi * EXTRA_PREZZO,
-      };
     });
-    return base.sort((a, b) => b.usi - a.usi);
-  }, [ordini]);
+    return [...usage.entries()].map(([ingrediente, values]) => ({ ingrediente, ...values }));
+  }, [ingredientiRealiSistema, ordini]);
+  const extraStats = useMemo(
+    () =>
+      ingredientUsageStats
+        .filter((item) => item.isExtra)
+        .map((item) => ({
+          ingrediente: item.ingrediente,
+          usi: item.extraUsi,
+          ricavo: item.ricavoExtra,
+          stato:
+            item.extraUsi === 0
+              ? "Da monitorare"
+              : item.extraUsi <= 2
+                ? "Possibile spreco"
+                : "Da tenere sempre disponibile",
+        }))
+        .sort((a, b) => b.usi - a.usi),
+    [ingredientUsageStats]
+  );
   const ingredientiPocoUsati = useMemo(
-    () => [
-      { ingrediente: "Acciughe", usi: 1, spreco: 9, suggerimento: "Valutare rimozione dal menu" },
-      { ingrediente: "Capperi", usi: 2, spreco: 6, suggerimento: "Usare solo come speciale" },
-      { ingrediente: "Gorgonzola", usi: 3, spreco: 4, suggerimento: "Valutare rimozione dal menu" },
-    ],
-    []
+    () =>
+      ingredientUsageStats
+        .filter((item) => item.usi <= 3 || item.extraUsi === 0)
+        .map((item) => {
+          let suggerimento = "Da monitorare";
+          if (item.isExtra && item.extraUsi === 0) suggerimento = "Valutare rimozione dagli extra";
+          else if (item.isExtra && item.extraUsi <= 1) suggerimento = "Usare solo come speciale";
+          else if (item.ingrediente === "Gorgonzola" || item.ingrediente === "Scaglie di grana") {
+            suggerimento = "Tenere se utile a pizze premium";
+          }
+          const spreco = Number((item.isExtra ? 2 + item.usi * 0.25 : 1 + item.usi * 0.15).toFixed(2));
+          return {
+            ingrediente: item.ingrediente,
+            usi: item.usi,
+            ricavoExtra: item.isExtra ? item.ricavoExtra : 0,
+            spreco,
+            suggerimento,
+          };
+        })
+        .sort((a, b) => a.usi - b.usi || b.spreco - a.spreco)
+        .slice(0, 8),
+    [ingredientUsageStats]
   );
   const topPizzaDelGiorno = useMemo(() => {
     const map = new Map<string, number>();
@@ -1721,14 +1801,14 @@ export default function Home() {
                           {item.quantita}x {item.nome}
                         </h3>
                         <p className="font-semibold">
-                          {formatEuro((item.basePrezzo + item.extra.length * EXTRA_PREZZO) * item.quantita)}
+                          {formatEuro((item.basePrezzo + getTotaleExtra(item.extra)) * item.quantita)}
                         </p>
                       </div>
                       <p className="mt-1 text-xs text-[#82513a]">
-                        Prezzo unitario: {formatEuro(item.basePrezzo + item.extra.length * EXTRA_PREZZO)}
+                        Prezzo unitario: {formatEuro(item.basePrezzo + getTotaleExtra(item.extra))}
                       </p>
                       <p className="mt-1 text-xs font-semibold text-[#6d4331]">
-                        Totale: {formatEuro((item.basePrezzo + item.extra.length * EXTRA_PREZZO) * item.quantita)}
+                        Totale: {formatEuro((item.basePrezzo + getTotaleExtra(item.extra)) * item.quantita)}
                       </p>
                       {item.extra.length > 0 && <p className="mt-2 text-xs text-[#82513a]">Extra: {item.extra.join(", ")}</p>}
                       {item.note && <p className="mt-1 text-xs text-[#82513a]">Note: {item.note}</p>}
@@ -2047,7 +2127,7 @@ export default function Home() {
                         </div>
                         <div className="mt-2 space-y-2 rounded-xl bg-[#fff7f0] p-2">
                           {ordine.righe.map((riga) => {
-                            const prezzoUnitario = riga.basePrezzo + riga.extra.length * EXTRA_PREZZO;
+                            const prezzoUnitario = riga.basePrezzo + getTotaleExtra(riga.extra);
                             const totaleRiga = prezzoUnitario * riga.quantita;
                             return (
                               <div key={riga.id} className="rounded-lg bg-white p-2">
@@ -2586,7 +2666,7 @@ export default function Home() {
                                   : "border-[#ecc8b1] bg-white text-[#82513a]"
                               }`}
                             >
-                              {extra} (+{formatEuro(EXTRA_PREZZO)})
+                              {extra} (+{formatEuro(getExtraPrezzo(extra))})
                             </button>
                           ))}
                         </div>
@@ -2599,10 +2679,10 @@ export default function Home() {
                       <article key={row.id} className="rounded-xl border border-[#ecd7c8] bg-white p-3 text-sm">
                         <div className="flex items-center justify-between gap-2">
                           <p className="font-semibold">{row.quantita}x {row.nome}</p>
-                          <p className="font-semibold">{formatEuro((row.basePrezzo + row.extra.length * EXTRA_PREZZO) * row.quantita)}</p>
+                          <p className="font-semibold">{formatEuro((row.basePrezzo + getTotaleExtra(row.extra)) * row.quantita)}</p>
                         </div>
-                        <p className="mt-1 text-xs text-[#6d4331]">Prezzo unitario: {formatEuro(row.basePrezzo + row.extra.length * EXTRA_PREZZO)}</p>
-                        <p className="text-xs font-semibold text-[#6d4331]">Totale riga: {formatEuro((row.basePrezzo + row.extra.length * EXTRA_PREZZO) * row.quantita)}</p>
+                        <p className="mt-1 text-xs text-[#6d4331]">Prezzo unitario: {formatEuro(row.basePrezzo + getTotaleExtra(row.extra))}</p>
+                        <p className="text-xs font-semibold text-[#6d4331]">Totale riga: {formatEuro((row.basePrezzo + getTotaleExtra(row.extra)) * row.quantita)}</p>
                         <div className="mt-2 flex items-center gap-2">
                           <input type="number" min={1} value={row.quantita} onChange={(e) => aggiornaQuantitaManualRow(row.id, Math.max(1, Number(e.target.value) || 1))} className="w-20 rounded-lg border border-[#ecc8b1] p-2 text-xs" />
                           <button onClick={() => removeManualRow(row.id)} className="rounded-lg border border-[#d9b7a3] px-3 py-2 text-xs font-semibold text-[#8f3b18]">Rimuovi</button>
@@ -2729,6 +2809,11 @@ export default function Home() {
               {adminTab === "prodotti" && (
                 <>
                   <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <p className="text-xs text-[#6d4331]">
+                      Dati demo calcolati sugli ordini presenti nella simulazione. Nella versione reale questi dati saranno generati dagli ordini effettivi.
+                    </p>
+                  </section>
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
                     <h2 className="font-semibold">Pizze più vendute</h2>
                     <div className="mt-2 space-y-2 text-sm">
                       {pizzaStats.map((item) => (
@@ -2752,7 +2837,7 @@ export default function Home() {
                           <p className="font-semibold">{item.ingrediente}</p>
                           <p className="text-xs text-[#6d4331]">Volte usato: {item.usi}</p>
                           <p className="text-xs text-[#6d4331]">Ricavo extra: {formatEuro(item.ricavo)}</p>
-                          <p className="text-xs font-semibold text-emerald-700">Da tenere sempre disponibile</p>
+                          <p className={`text-xs font-semibold ${item.usi === 0 ? "text-amber-800" : "text-emerald-700"}`}>{item.stato}</p>
                         </article>
                       ))}
                     </div>
@@ -2764,6 +2849,7 @@ export default function Home() {
                         <article key={item.ingrediente} className="rounded-xl bg-[#fffaf6] p-3">
                           <p className="font-semibold">{item.ingrediente}</p>
                           <p className="text-xs text-[#6d4331]">Volte usato: {item.usi}</p>
+                          <p className="text-xs text-[#6d4331]">Ricavo extra: {formatEuro(item.ricavoExtra)}</p>
                           <p className="text-xs text-[#6d4331]">Costo/spreco stimato: {formatEuro(item.spreco)}</p>
                           <p className="text-xs font-semibold text-amber-800">{item.suggerimento}</p>
                         </article>
@@ -2907,7 +2993,7 @@ export default function Home() {
                     }
                     className={`rounded-xl border px-3 py-2 text-sm ${extraSelezionati.includes(extra) ? "border-[#8f3b18] bg-[#f4dfd0]" : "border-[#e8cdb7]"}`}
                   >
-                    {extra}
+                    {extra} + {formatEuro(getExtraPrezzo(extra))}
                   </button>
                 ))}
               </div>
