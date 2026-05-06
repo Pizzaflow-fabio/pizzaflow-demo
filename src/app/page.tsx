@@ -1493,6 +1493,12 @@ export default function Home() {
     setShowSavePreferredForm(false);
   }
 
+  function buildManualRowSignature(row: Pick<RigaCarrello, "pizzaId" | "extra" | "note" | "ingredientiRimossi">) {
+    const extra = [...row.extra].sort().join("|");
+    const ingredientiRimossi = [...(row.ingredientiRimossi ?? [])].sort().join("|");
+    return [row.pizzaId, extra, ingredientiRimossi, row.note.trim().toLowerCase()].join("::");
+  }
+
   function aggiungiPizzaOrdineManuale() {
     const pizza = manualPizzaSelezionata;
     if (!pizza || manualPizzaQty < 1) return;
@@ -1506,7 +1512,14 @@ export default function Home() {
       adminNote: manualPizzaNote.trim(),
       quantita: manualPizzaQty,
     };
-    setManualRows((prev) => [...prev, nuovaRiga]);
+    setManualRows((prev) => {
+      const nuovaFirma = buildManualRowSignature(nuovaRiga);
+      const existingIndex = prev.findIndex((row) => buildManualRowSignature(row) === nuovaFirma);
+      if (existingIndex === -1) return [...prev, nuovaRiga];
+      return prev.map((row, index) =>
+        index === existingIndex ? { ...row, quantita: row.quantita + manualPizzaQty } : row
+      );
+    });
     setManualPizzaQty(1);
     setManualPizzaNote("");
     setManualExtraSelezionati([]);
@@ -1521,6 +1534,14 @@ export default function Home() {
 
   function removeManualRow(rowId: string) {
     setManualRows((prev) => prev.filter((row) => row.id !== rowId));
+  }
+
+  function incrementaManualPizzaQty() {
+    setManualPizzaQty((prev) => Math.max(1, prev + 1));
+  }
+
+  function decrementaManualPizzaQty() {
+    setManualPizzaQty((prev) => Math.max(1, prev - 1));
   }
 
   function buildWhatsappOrderMessage(ordine: Ordine) {
@@ -2672,7 +2693,35 @@ export default function Home() {
                         </div>
                       </div>
                     )}
-                    <input type="number" min={1} value={manualPizzaQty} onChange={(e) => setManualPizzaQty(Math.max(1, Number(e.target.value) || 1))} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Quantita" />
+                    <div className="rounded-xl border border-[#ecc8b1] bg-white p-2">
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#9a715c]">Quantita</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          onClick={decrementaManualPizzaQty}
+                          className="h-10 w-10 rounded-xl border border-[#d9b7a3] bg-white text-lg font-bold text-[#8f3b18]"
+                          aria-label="Diminuisci quantità"
+                        >
+                          -
+                        </button>
+                        <div className="min-w-10 text-center text-xl font-bold text-[#3a1f12]">{manualPizzaQty}</div>
+                        <button
+                          onClick={incrementaManualPizzaQty}
+                          className="h-10 w-10 rounded-xl border border-[#d9b7a3] bg-white text-lg font-bold text-[#8f3b18]"
+                          aria-label="Aumenta quantità"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <input
+                        type="number"
+                        min={1}
+                        value={manualPizzaQty}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onChange={(e) => setManualPizzaQty(Math.max(1, Number(e.target.value) || 1))}
+                        className="mt-2 w-full rounded-xl border border-[#ecc8b1] p-2 text-center text-sm"
+                        placeholder="Quantita"
+                      />
+                    </div>
                     <textarea value={manualPizzaNote} onChange={(e) => setManualPizzaNote(e.target.value)} className="h-20 w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Note pizza" />
                     <button onClick={aggiungiPizzaOrdineManuale} className="w-full rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white">Aggiungi pizza all&apos;ordine</button>
                     {manualRows.map((row) => (
@@ -2684,7 +2733,29 @@ export default function Home() {
                         <p className="mt-1 text-xs text-[#6d4331]">Prezzo unitario: {formatEuro(row.basePrezzo + getTotaleExtra(row.extra))}</p>
                         <p className="text-xs font-semibold text-[#6d4331]">Totale riga: {formatEuro((row.basePrezzo + getTotaleExtra(row.extra)) * row.quantita)}</p>
                         <div className="mt-2 flex items-center gap-2">
-                          <input type="number" min={1} value={row.quantita} onChange={(e) => aggiornaQuantitaManualRow(row.id, Math.max(1, Number(e.target.value) || 1))} className="w-20 rounded-lg border border-[#ecc8b1] p-2 text-xs" />
+                          <button
+                            onClick={() => aggiornaQuantitaManualRow(row.id, Math.max(1, row.quantita - 1))}
+                            className="h-8 w-8 rounded-lg border border-[#d9b7a3] bg-white text-sm font-bold text-[#8f3b18]"
+                            aria-label={`Diminuisci quantità ${row.nome}`}
+                          >
+                            -
+                          </button>
+                          <span className="min-w-8 text-center text-sm font-bold">{row.quantita}</span>
+                          <button
+                            onClick={() => aggiornaQuantitaManualRow(row.id, row.quantita + 1)}
+                            className="h-8 w-8 rounded-lg border border-[#d9b7a3] bg-white text-sm font-bold text-[#8f3b18]"
+                            aria-label={`Aumenta quantità ${row.nome}`}
+                          >
+                            +
+                          </button>
+                          <input
+                            type="number"
+                            min={1}
+                            value={row.quantita}
+                            onFocus={(e) => e.currentTarget.select()}
+                            onChange={(e) => aggiornaQuantitaManualRow(row.id, Math.max(1, Number(e.target.value) || 1))}
+                            className="w-16 rounded-lg border border-[#ecc8b1] p-2 text-center text-xs"
+                          />
                           <button onClick={() => removeManualRow(row.id)} className="rounded-lg border border-[#d9b7a3] px-3 py-2 text-xs font-semibold text-[#8f3b18]">Rimuovi</button>
                         </div>
                         {row.extra.length > 0 && <p className="mt-1 text-xs text-[#6d4331]">Extra: {row.extra.join(", ")}</p>}
