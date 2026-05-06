@@ -23,6 +23,8 @@ type SlotFiltro =
 type AdminTab =
   | "dashboard"
   | "ordini"
+  | "kanban"
+  | "capacita"
   | "ordine-telefonico"
   | "crm"
   | "rfm"
@@ -863,12 +865,7 @@ export default function Home() {
         .reduce((acc, o) => acc + o.totaleFinale, 0),
     [ordiniOggi]
   );
-  const ordiniCheRichiedonoPos = useMemo(
-    () => ordiniOggi.filter((o) => o.needsPos && o.paymentStatus === "da pagare").length,
-    [ordiniOggi]
-  );
   const scontrinoMedio = ordiniOggi.length ? fatturatoDemo / ordiniOggi.length : 0;
-  const clientiAttivi = clienti.filter((c) => c.ultimoOrdineGiorniFa <= 30).length;
   const ordiniAttiviCount = ordiniOggi.filter((o) => {
     const finalState = o.tipoOrdine === "ritiro" ? "ritirato" : "consegnato";
     return o.stato !== finalState;
@@ -1005,6 +1002,13 @@ export default function Home() {
         (s) => s.pickupStatus === "pieno" || s.deliveryStatus === "pieno" || s.kitchenFull
       ).length,
     }),
+    [adminSlotCapacity]
+  );
+  const slotCriticiCount = useMemo(
+    () =>
+      adminSlotCapacity.filter(
+        (slot) => slot.kitchenOverloaded || slot.pickupOverloaded || slot.deliveryOverloaded
+      ).length,
     [adminSlotCapacity]
   );
   const slotCapacityFiltered = useMemo(() => {
@@ -2254,6 +2258,8 @@ export default function Home() {
                 <div className="flex min-w-max gap-2">
                   <button onClick={() => setAdminTab("dashboard")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "dashboard" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Dashboard</button>
                   <button onClick={() => setAdminTab("ordini")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "ordini" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Ordini</button>
+                  <button onClick={() => setAdminTab("kanban")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "kanban" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Kanban</button>
+                  <button onClick={() => setAdminTab("capacita")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "capacita" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Capacità</button>
                   <button onClick={() => setAdminTab("ordine-telefonico")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "ordine-telefonico" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Ordine telefonico</button>
                   <button onClick={() => setAdminTab("crm")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "crm" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>CRM</button>
                   <button onClick={() => setAdminTab("rfm")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "rfm" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>RFM</button>
@@ -2263,373 +2269,165 @@ export default function Home() {
               </div>
 
               {adminTab === "ordini" && (
-                <>
+                <section className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <MetricCard titolo="Ordini oggi" valore={String(ordiniOggi.length)} />
-                    <MetricCard titolo="Fatturato demo" valore={formatEuro(fatturatoDemo)} />
-                    <MetricCard titolo="Clienti attivi" valore={String(clientiAttivi)} />
-                    <MetricCard titolo="Scontrino medio" valore={formatEuro(scontrinoMedio)} />
-                    <MetricCard titolo="Incasso online simulato" valore={formatEuro(incassoOnlineSimulato)} />
-                    <MetricCard titolo="Da riscuotere (contanti)" valore={formatEuro(incassoContantiDaRiscuotere)} />
-                    <MetricCard titolo="Da riscuotere (POS)" valore={formatEuro(incassoPosDaRiscuotere)} />
-                    <MetricCard titolo="Ordini con POS" valore={String(ordiniCheRichiedonoPos)} />
+                    <MetricCard titolo="Comande da stampare" valore={String(comandeDaStampare)} />
                   </div>
+                  <button
+                    onClick={() => apriAnteprimaComanda(ordiniOggi.filter((o) => !o.printed))}
+                    disabled={comandeDaStampare === 0}
+                    className="w-full rounded-xl bg-[#8f3b18] px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Stampa comande non ancora stampate
+                  </button>
+                  <div className="grid grid-cols-3 gap-2 rounded-2xl border border-[#f0d7c7] bg-white p-1">
+                    <button onClick={() => setAdminFiltro("tutti")} className={`rounded-xl py-2 text-xs font-semibold ${adminFiltro === "tutti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Tutti</button>
+                    <button onClick={() => setAdminFiltro("ritiro")} className={`rounded-xl py-2 text-xs font-semibold ${adminFiltro === "ritiro" ? "bg-amber-100 text-amber-800" : "text-[#82513a]"}`}>Solo ritiro</button>
+                    <button onClick={() => setAdminFiltro("consegna")} className={`rounded-xl py-2 text-xs font-semibold ${adminFiltro === "consegna" ? "bg-sky-100 text-sky-800" : "text-[#82513a]"}`}>Solo consegna</button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 rounded-2xl border border-[#f0d7c7] bg-white p-1">
+                    <button onClick={() => setAdminPrintFilter("tutti")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "tutti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Tutti</button>
+                    <button onClick={() => setAdminPrintFilter("da-stampare")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "da-stampare" ? "bg-amber-100 text-amber-800" : "text-[#82513a]"}`}>Da stampare</button>
+                    <button onClick={() => setAdminPrintFilter("stampati")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "stampati" ? "bg-emerald-100 text-emerald-800" : "text-[#82513a]"}`}>Stampati</button>
+                  </div>
+                  <div className="space-y-2">
+                    {ordiniFiltratiStampa.map((ordine) => (
+                      <article key={`list-${ordine.id}`} className="rounded-2xl border border-[#ecd7c8] bg-white p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold">{ordine.id} - {ordine.clienteNome}</p>
+                          <p className="text-xs font-semibold">{formatEuro(ordine.totaleFinale)}</p>
+                        </div>
+                        <p className="mt-1 text-xs text-[#6d4331]">
+                          {ordine.orarioScelto} - {ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"} - Stato: {ordine.stato}
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.printed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>
+                            {ordine.printed ? "STAMPATA" : "DA STAMPARE"}
+                          </span>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.source === "telefono" ? "bg-orange-100 text-orange-800" : "bg-emerald-100 text-emerald-800"}`}>
+                            {ordine.source === "telefono" ? "TELEFONICO" : "APP"}
+                          </span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <button onClick={() => avanzaStatoOrdine(ordine.id)} disabled={ordine.stato === (ordine.tipoOrdine === "ritiro" ? "ritirato" : "consegnato")} className="rounded-lg bg-[#8f3b18] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Avanza stato</button>
+                          <button onClick={() => apriAnteprimaComanda([ordine])} className="rounded-lg border border-[#8f3b18] bg-white px-3 py-2 text-xs font-semibold text-[#8f3b18]">Stampa comanda</button>
+                        </div>
+                      </article>
+                    ))}
+                    {ordiniFiltratiStampa.length === 0 && (
+                      <p className="rounded-xl bg-[#fff7f0] p-3 text-xs text-[#82513a]">Nessun ordine per i filtri selezionati.</p>
+                    )}
+                  </div>
+                </section>
+              )}
 
-              <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
-                <h2 className="font-semibold">Impostazioni orari</h2>
-                <div className="mt-2 space-y-1 text-sm text-[#6d4331]">
-                  <p>Apertura: {ORARI_PIZZERIA.openingTime}</p>
-                  <p>Chiusura: {ORARI_PIZZERIA.closingTime}</p>
-                  <p>Intervallo slot: {ORARI_PIZZERIA.slotIntervalMinutes} minuti</p>
-                </div>
-                <div className="mt-4 space-y-2 rounded-xl bg-[#fff7f0] p-3 text-xs">
-                  <p className="font-semibold uppercase tracking-wide text-[#9a715c]">Capacita ritiro e consegna</p>
-                  <label className="block">
-                    Pizze totali per slot
-                    <input type="number" min={1} value={slotCapacityDraft.maxTotalPizzasPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxTotalPizzasPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
-                  </label>
-                  <label className="block">
-                    Pizze ritiro per slot
-                    <input type="number" min={1} value={slotCapacityDraft.maxPickupPizzasPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxPickupPizzasPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
-                  </label>
-                  <label className="block">
-                    Ordini ritiro per slot
-                    <input type="number" min={1} value={slotCapacityDraft.maxPickupOrdersPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxPickupOrdersPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
-                  </label>
-                  <label className="block">
-                    Rider disponibili
-                    <input type="number" min={0} value={slotCapacityDraft.ridersAvailable} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, ridersAvailable: Math.max(0, Number(e.target.value) || 0) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
-                  </label>
-                  <label className="block">
-                    Pizze consegnabili per rider per slot
-                    <input type="number" min={1} value={slotCapacityDraft.pizzasPerRiderPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, pizzasPerRiderPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
-                  </label>
-                  <p>Pizze consegna per slot (calcolate): <span className="font-semibold">{calcolataDeliveryCapacityDraft}</span></p>
-                  <label className="block">
-                    Ordini consegna per slot
-                    <input type="number" min={1} value={slotCapacityDraft.maxDeliveryOrdersPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxDeliveryOrdersPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" />
-                  </label>
-                  <button onClick={applicaCapacitaDemo} className="w-full rounded-xl bg-[#8f3b18] py-2 font-semibold text-white">Applica capacita demo</button>
-                </div>
-              </section>
+              {adminTab === "kanban" && (
+                <section className="space-y-2">
+                  <h2 className="text-sm font-bold uppercase tracking-wide text-[#9a715c]">Kanban operativo ordini</h2>
+                  <div className="grid grid-cols-2 gap-2">
+                    <MetricCard titolo="Comande da stampare" valore={String(comandeDaStampare)} />
+                    <MetricCard titolo="Comande stampate oggi" valore={String(comandeStampate)} />
+                  </div>
+                  <button onClick={avanzaTuttiOrdiniAttivi} className="w-full rounded-xl border border-[#d59e7d] bg-white px-4 py-3 text-sm font-semibold text-[#8f3b18]">
+                    Avanza tutti gli ordini attivi ({ordiniAttiviCount})
+                  </button>
+                  <div className="grid grid-cols-3 gap-2 rounded-2xl border border-[#f0d7c7] bg-white p-1">
+                    <button onClick={() => setAdminFiltro("tutti")} className={`rounded-xl py-2 text-xs font-semibold ${adminFiltro === "tutti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Tutti</button>
+                    <button onClick={() => setAdminFiltro("ritiro")} className={`rounded-xl py-2 text-xs font-semibold ${adminFiltro === "ritiro" ? "bg-amber-100 text-amber-800" : "text-[#82513a]"}`}>Solo ritiro</button>
+                    <button onClick={() => setAdminFiltro("consegna")} className={`rounded-xl py-2 text-xs font-semibold ${adminFiltro === "consegna" ? "bg-sky-100 text-sky-800" : "text-[#82513a]"}`}>Solo consegna</button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 rounded-2xl border border-[#f0d7c7] bg-white p-1">
+                    <button onClick={() => setAdminPrintFilter("tutti")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "tutti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Tutti</button>
+                    <button onClick={() => setAdminPrintFilter("da-stampare")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "da-stampare" ? "bg-amber-100 text-amber-800" : "text-[#82513a]"}`}>Da stampare</button>
+                    <button onClick={() => setAdminPrintFilter("stampati")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "stampati" ? "bg-emerald-100 text-emerald-800" : "text-[#82513a]"}`}>Stampati</button>
+                  </div>
+                  <div className="flex gap-3 overflow-x-auto pb-1">
+                    {KANBAN_COLUMNS.map((column) => {
+                      const ordiniColonna = ordiniFiltratiStampa.filter((ordine) => getKanbanColumn(ordine.stato) === column.key);
+                      return (
+                        <div key={column.key} className="w-[16.5rem] shrink-0 rounded-2xl border border-[#f0d7c7] bg-[#fff7f0] p-3">
+                          <div className="mb-2 flex items-center justify-between">
+                            <h3 className="text-sm font-bold text-[#8f3b18]">{column.titolo}</h3>
+                            <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-[#82513a]">{ordiniColonna.length}</span>
+                          </div>
+                          <div className="space-y-2">
+                            {ordiniColonna.length === 0 && <p className="rounded-xl bg-white p-3 text-xs text-[#9a715c]">Nessun ordine</p>}
+                            {ordiniColonna.map((ordine) => (
+                              <article key={ordine.id} className="rounded-xl border border-[#ecd7c8] bg-white p-3">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-sm font-semibold">{ordine.id}</p>
+                                  <p className="text-xs font-semibold">{formatEuro(ordine.totaleFinale)}</p>
+                                </div>
+                                <p className="mt-1 text-xs text-[#82513a]">Cliente: {ordine.clienteNome}</p>
+                                <div className="mt-2 flex flex-wrap gap-1">
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.tipoOrdine === "ritiro" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>{ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}</span>
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.source === "telefono" ? "bg-orange-100 text-orange-800" : "bg-emerald-100 text-emerald-800"}`}>{ordine.source === "telefono" ? "TELEFONICO" : "APP"}</span>
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.printed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>{ordine.printed ? "COMANDA STAMPATA" : "DA STAMPARE"}</span>
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.paymentStatus === "pagato" ? "bg-emerald-100 text-emerald-800" : "bg-orange-100 text-orange-800"}`}>{ordine.paymentStatus === "pagato" ? "PAGATO" : "DA INCASSARE"}</span>
+                                </div>
+                                <button onClick={() => avanzaStatoOrdine(ordine.id)} disabled={ordine.stato === (ordine.tipoOrdine === "ritiro" ? "ritirato" : "consegnato")} className="mt-2 w-full rounded-lg bg-[#8f3b18] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Avanza stato</button>
+                              </article>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
 
-              <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
-                <h2 className="font-semibold">Capacità slot di oggi</h2>
-                <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#fff7f0] p-2 text-xs">
-                  <p className="rounded-lg bg-white p-2 text-center">
-                    Disponibili: <span className="font-semibold">{slotSummary.disponibili}</span>
-                  </p>
-                  <p className="rounded-lg bg-white p-2 text-center">
-                    Quasi pieni: <span className="font-semibold">{slotSummary.quasiPieni}</span>
-                  </p>
-                  <p className="rounded-lg bg-white p-2 text-center">
-                    Pieni: <span className="font-semibold">{slotSummary.pieni}</span>
-                  </p>
-                </div>
-                <div className="mt-2 rounded-xl bg-[#fff7f0] p-2 text-[11px] text-[#6d4331]">
-                  Stati: disponibile · quasi pieno · pieno · sovraccarico
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-[#f0d7c7] bg-[#fffaf6] p-1">
-                  <button
-                    onClick={() => setSlotFiltro("tutti")}
-                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "tutti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}
-                  >
-                    Tutti
-                  </button>
-                  <button
-                    onClick={() => setSlotFiltro("ritiro-disponibili")}
-                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "ritiro-disponibili" ? "bg-emerald-100 text-emerald-800" : "text-[#82513a]"}`}
-                  >
-                    Ritiro disponibili
-                  </button>
-                  <button
-                    onClick={() => setSlotFiltro("ritiro-pieni")}
-                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "ritiro-pieni" ? "bg-red-100 text-red-800" : "text-[#82513a]"}`}
-                  >
-                    Ritiro pieni
-                  </button>
-                  <button
-                    onClick={() => setSlotFiltro("consegna-disponibili")}
-                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "consegna-disponibili" ? "bg-sky-100 text-sky-800" : "text-[#82513a]"}`}
-                  >
-                    Consegna disponibili
-                  </button>
-                  <button
-                    onClick={() => setSlotFiltro("consegna-pieni")}
-                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "consegna-pieni" ? "bg-orange-100 text-orange-800" : "text-[#82513a]"}`}
-                  >
-                    Consegna pieni
-                  </button>
-                  <button
-                    onClick={() => setSlotFiltro("cucina-piena")}
-                    className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "cucina-piena" ? "bg-stone-200 text-stone-900" : "text-[#82513a]"}`}
-                  >
-                    Cucina piena
-                  </button>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {slotCapacityFiltered.map((slot) => (
-                    <div
-                      key={`cap-${slot.slot}`}
-                      className={`rounded-xl border p-3 text-xs ${
-                        slot.kitchenOverloaded
-                          ? "border-red-700 bg-red-200 ring-2 ring-red-600"
-                          : slot.kitchenFull
-                          ? "border-stone-400 bg-stone-100"
-                          : slot.pickupOverloaded || slot.deliveryOverloaded
-                            ? "border-red-600 bg-red-100 ring-2 ring-red-500"
-                          : slot.pickupStatus === "pieno" || slot.deliveryStatus === "pieno"
-                          ? "border-red-300 bg-red-50"
-                          : slot.pickupStatus === "quasi pieno" || slot.deliveryStatus === "quasi pieno"
-                            ? "border-amber-300 bg-amber-50"
-                            : "border-[#ecd7c8] bg-[#fffaf6]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between pb-2">
-                        <p className="font-semibold">Orario {slot.slot}</p>
-                        <div className="flex flex-wrap justify-end gap-1">
-                        {slot.riderLimited && (
-                          <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-900">
-                            RIDER LIMITATO
-                          </span>
-                        )}
-                        {slot.deliveryOverloaded && (
-                          <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                            SOVRACCARICO CONSEGNE
-                          </span>
-                        )}
-                        {slot.pickupOverloaded && (
-                          <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                            SOVRACCARICO RITIRO
-                          </span>
-                        )}
-                        {slot.kitchenOverloaded && (
-                          <span className="rounded-full bg-red-800 px-2 py-0.5 text-[10px] font-bold text-white">
-                            CUCINA OLTRE CAPACITA
-                          </span>
-                        )}
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="rounded-lg bg-white p-2">
-                          <p className="font-bold text-amber-800">RITIRO</p>
-                          <p>Ordini: {slot.pickupOrders} / {slotCapacityConfig.maxPickupOrdersPerSlot}</p>
-                          <p>Pizze: {slot.pickupPizzas} / {slotCapacityConfig.maxPickupPizzasPerSlot}</p>
-                          <p>Stato: {slot.pickupOverloaded ? "sovraccarico" : slot.pickupStatus}</p>
-                        </div>
-                        <div className="rounded-lg bg-white p-2">
-                          <p className="font-bold text-sky-800">CONSEGNA</p>
-                          <p>Ordini: {slot.deliveryOrders} / {slotCapacityConfig.maxDeliveryOrdersPerSlot}</p>
-                          <p>Pizze: {slot.deliveryPizzas} / {slotCapacityConfig.maxDeliveryPizzasPerSlot}</p>
-                          <p>Rider: {slotCapacityConfig.ridersAvailable}</p>
-                          <p>Stato: {slot.deliveryOverloaded ? "sovraccarico" : slot.deliveryStatus}</p>
-                        </div>
-                      </div>
-                      <p className="mt-2 rounded-lg bg-white p-2 font-semibold">
-                        TOTALE CUCINA - Pizze: {slot.totalPizzas} / {slotCapacityConfig.maxTotalPizzasPerSlot} (
-                        {slot.kitchenOverloaded ? "sovraccarico cucina" : slot.kitchenFull ? "pieno" : "ok"})
-                      </p>
+              {adminTab === "capacita" && (
+                <>
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <h2 className="font-semibold">Impostazioni orari</h2>
+                    <div className="mt-2 space-y-1 text-sm text-[#6d4331]">
+                      <p>Apertura: {ORARI_PIZZERIA.openingTime}</p>
+                      <p>Chiusura: {ORARI_PIZZERIA.closingTime}</p>
+                      <p>Intervallo slot: {ORARI_PIZZERIA.slotIntervalMinutes} minuti</p>
                     </div>
-                  ))}
-                  {slotCapacityFiltered.length === 0 && (
-                    <p className="rounded-xl bg-[#fff7f0] p-3 text-xs text-[#82513a]">
-                      Nessuno slot per il filtro selezionato.
-                    </p>
-                  )}
-                </div>
-              </section>
-
-              <section className="space-y-2">
-                <h2 className="text-sm font-bold uppercase tracking-wide text-[#9a715c]">Ordini di oggi - Kanban operativo</h2>
-                <div className="grid grid-cols-2 gap-2">
-                  <MetricCard titolo="Comande da stampare" valore={String(comandeDaStampare)} />
-                  <MetricCard titolo="Comande stampate oggi" valore={String(comandeStampate)} />
-                </div>
-                <button onClick={avanzaTuttiOrdiniAttivi} className="w-full rounded-xl border border-[#d59e7d] bg-white px-4 py-3 text-sm font-semibold text-[#8f3b18]">
-                  Avanza tutti gli ordini attivi ({ordiniAttiviCount})
-                </button>
-                <button
-                  onClick={() => apriAnteprimaComanda(ordiniOggi.filter((o) => !o.printed))}
-                  disabled={comandeDaStampare === 0}
-                  className="w-full rounded-xl bg-[#8f3b18] px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Stampa comande non ancora stampate
-                </button>
-                <p className="text-xs text-[#6d4331]">
-                  Stampa solo gli ordini che non hanno ancora una comanda cucina stampata.
-                </p>
-                {comandeDaStampare === 0 && (
-                  <p className="rounded-xl bg-emerald-100 p-2 text-xs font-semibold text-emerald-800">
-                    Tutte le comande sono gia state stampate.
-                  </p>
-                )}
-                <div className="grid grid-cols-3 gap-2 rounded-2xl border border-[#f0d7c7] bg-white p-1">
-                  <button
-                    onClick={() => setAdminFiltro("tutti")}
-                    className={`rounded-xl py-2 text-xs font-semibold ${adminFiltro === "tutti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}
-                  >
-                    Tutti
-                  </button>
-                  <button
-                    onClick={() => setAdminFiltro("ritiro")}
-                    className={`rounded-xl py-2 text-xs font-semibold ${adminFiltro === "ritiro" ? "bg-amber-100 text-amber-800" : "text-[#82513a]"}`}
-                  >
-                    Solo ritiro
-                  </button>
-                  <button
-                    onClick={() => setAdminFiltro("consegna")}
-                    className={`rounded-xl py-2 text-xs font-semibold ${adminFiltro === "consegna" ? "bg-sky-100 text-sky-800" : "text-[#82513a]"}`}
-                  >
-                    Solo consegna
-                  </button>
-                </div>
-                <div className="grid grid-cols-3 gap-2 rounded-2xl border border-[#f0d7c7] bg-white p-1">
-                  <button onClick={() => setAdminPrintFilter("tutti")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "tutti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Tutti</button>
-                  <button onClick={() => setAdminPrintFilter("da-stampare")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "da-stampare" ? "bg-amber-100 text-amber-800" : "text-[#82513a]"}`}>Da stampare</button>
-                  <button onClick={() => setAdminPrintFilter("stampati")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "stampati" ? "bg-emerald-100 text-emerald-800" : "text-[#82513a]"}`}>Stampati</button>
-                </div>
-
-                <div className="flex gap-3 overflow-x-auto pb-1">
-                  {KANBAN_COLUMNS.map((column) => {
-                    const ordiniColonna = ordiniFiltratiStampa.filter(
-                      (ordine) => getKanbanColumn(ordine.stato) === column.key
-                    );
-                    return (
-                      <div key={column.key} className="w-[16.5rem] shrink-0 rounded-2xl border border-[#f0d7c7] bg-[#fff7f0] p-3">
-                        <div className="mb-2 flex items-center justify-between">
-                          <h3 className="text-sm font-bold text-[#8f3b18]">{column.titolo}</h3>
-                          <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-[#82513a]">
-                            {ordiniColonna.length}
-                          </span>
+                    <div className="mt-4 space-y-2 rounded-xl bg-[#fff7f0] p-3 text-xs">
+                      <p className="font-semibold uppercase tracking-wide text-[#9a715c]">Capacita ritiro e consegna</p>
+                      <label className="block">Pizze totali per slot<input type="number" min={1} value={slotCapacityDraft.maxTotalPizzasPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxTotalPizzasPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" /></label>
+                      <label className="block">Pizze ritiro per slot<input type="number" min={1} value={slotCapacityDraft.maxPickupPizzasPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxPickupPizzasPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" /></label>
+                      <label className="block">Ordini ritiro per slot<input type="number" min={1} value={slotCapacityDraft.maxPickupOrdersPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxPickupOrdersPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" /></label>
+                      <label className="block">Rider disponibili<input type="number" min={0} value={slotCapacityDraft.ridersAvailable} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, ridersAvailable: Math.max(0, Number(e.target.value) || 0) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" /></label>
+                      <label className="block">Pizze consegnabili per rider per slot<input type="number" min={1} value={slotCapacityDraft.pizzasPerRiderPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, pizzasPerRiderPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" /></label>
+                      <p>Pizze consegna per slot (calcolate): <span className="font-semibold">{calcolataDeliveryCapacityDraft}</span></p>
+                      <label className="block">Ordini consegna per slot<input type="number" min={1} value={slotCapacityDraft.maxDeliveryOrdersPerSlot} onChange={(e) => setSlotCapacityDraft((prev) => ({ ...prev, maxDeliveryOrdersPerSlot: Math.max(1, Number(e.target.value) || 1) }))} className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2" /></label>
+                      <button onClick={applicaCapacitaDemo} className="w-full rounded-xl bg-[#8f3b18] py-2 font-semibold text-white">Applica capacita demo</button>
+                    </div>
+                  </section>
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <h2 className="font-semibold">Capacità slot di oggi</h2>
+                    <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#fff7f0] p-2 text-xs">
+                      <p className="rounded-lg bg-white p-2 text-center">Disponibili: <span className="font-semibold">{slotSummary.disponibili}</span></p>
+                      <p className="rounded-lg bg-white p-2 text-center">Quasi pieni: <span className="font-semibold">{slotSummary.quasiPieni}</span></p>
+                      <p className="rounded-lg bg-white p-2 text-center">Pieni: <span className="font-semibold">{slotSummary.pieni}</span></p>
+                    </div>
+                    <div className="mt-2 rounded-xl bg-[#fff7f0] p-2 text-[11px] text-[#6d4331]">Stati: disponibile · quasi pieno · pieno · sovraccarico</div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-[#f0d7c7] bg-[#fffaf6] p-1">
+                      <button onClick={() => setSlotFiltro("tutti")} className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "tutti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Tutti</button>
+                      <button onClick={() => setSlotFiltro("ritiro-disponibili")} className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "ritiro-disponibili" ? "bg-emerald-100 text-emerald-800" : "text-[#82513a]"}`}>Ritiro disponibili</button>
+                      <button onClick={() => setSlotFiltro("ritiro-pieni")} className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "ritiro-pieni" ? "bg-red-100 text-red-800" : "text-[#82513a]"}`}>Ritiro pieni</button>
+                      <button onClick={() => setSlotFiltro("consegna-disponibili")} className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "consegna-disponibili" ? "bg-sky-100 text-sky-800" : "text-[#82513a]"}`}>Consegna disponibili</button>
+                      <button onClick={() => setSlotFiltro("consegna-pieni")} className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "consegna-pieni" ? "bg-orange-100 text-orange-800" : "text-[#82513a]"}`}>Consegna pieni</button>
+                      <button onClick={() => setSlotFiltro("cucina-piena")} className={`rounded-lg py-2 text-xs font-semibold ${slotFiltro === "cucina-piena" ? "bg-stone-200 text-stone-900" : "text-[#82513a]"}`}>Cucina piena</button>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {slotCapacityFiltered.map((slot) => (
+                        <div key={`cap-${slot.slot}`} className={`rounded-xl border p-3 text-xs ${slot.kitchenOverloaded ? "border-red-700 bg-red-200 ring-2 ring-red-600" : slot.kitchenFull ? "border-stone-400 bg-stone-100" : slot.pickupOverloaded || slot.deliveryOverloaded ? "border-red-600 bg-red-100 ring-2 ring-red-500" : slot.pickupStatus === "pieno" || slot.deliveryStatus === "pieno" ? "border-red-300 bg-red-50" : slot.pickupStatus === "quasi pieno" || slot.deliveryStatus === "quasi pieno" ? "border-amber-300 bg-amber-50" : "border-[#ecd7c8] bg-[#fffaf6]"}`}>
+                          <div className="flex items-center justify-between pb-2"><p className="font-semibold">Orario {slot.slot}</p></div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="rounded-lg bg-white p-2"><p className="font-bold text-amber-800">RITIRO</p><p>Ordini: {slot.pickupOrders} / {slotCapacityConfig.maxPickupOrdersPerSlot}</p><p>Pizze: {slot.pickupPizzas} / {slotCapacityConfig.maxPickupPizzasPerSlot}</p><p>Stato: {slot.pickupOverloaded ? "sovraccarico" : slot.pickupStatus}</p></div>
+                            <div className="rounded-lg bg-white p-2"><p className="font-bold text-sky-800">CONSEGNA</p><p>Ordini: {slot.deliveryOrders} / {slotCapacityConfig.maxDeliveryOrdersPerSlot}</p><p>Pizze: {slot.deliveryPizzas} / {slotCapacityConfig.maxDeliveryPizzasPerSlot}</p><p>Rider: {slotCapacityConfig.ridersAvailable}</p><p>Stato: {slot.deliveryOverloaded ? "sovraccarico" : slot.deliveryStatus}</p></div>
+                          </div>
+                          <p className="mt-2 rounded-lg bg-white p-2 font-semibold">TOTALE CUCINA - Pizze: {slot.totalPizzas} / {slotCapacityConfig.maxTotalPizzasPerSlot} ({slot.kitchenOverloaded ? "sovraccarico cucina" : slot.kitchenFull ? "pieno" : "ok"})</p>
                         </div>
-                        <div className="space-y-2">
-                          {ordiniColonna.length === 0 && (
-                            <p className="rounded-xl bg-white p-3 text-xs text-[#9a715c]">
-                              Nessun ordine
-                            </p>
-                          )}
-                          {ordiniColonna.map((ordine) => {
-                            const highlightPos =
-                              ordine.tipoOrdine === "consegna" &&
-                              ordine.paymentMethod === "card_on_delivery" &&
-                              ordine.paymentStatus === "da pagare";
-                            return (
-                            <article
-                              key={ordine.id}
-                              className={`rounded-xl border bg-white p-3 ${
-                                highlightPos
-                                  ? "border-amber-500 ring-2 ring-amber-400"
-                                  : "border-[#ecd7c8]"
-                              }`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <p className="text-sm font-semibold">{ordine.id}</p>
-                                <p className="text-xs font-semibold">{formatEuro(ordine.totaleFinale)}</p>
-                              </div>
-                              <p className="mt-1 text-[10px] text-[#6d4331]">
-                                Data ordine: {formatItalianDate(ordine.orderDate)}
-                              </p>
-                              <p className="text-[10px] text-[#6d4331]">
-                                Ora inserimento: {formatItalianTime(ordine.createdAt)}
-                              </p>
-                              <p className="mt-1 text-xs text-[#82513a]">Cliente: {ordine.clienteNome}</p>
-                              <div className="mt-2 flex items-center gap-2">
-                                <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${ordine.tipoOrdine === "ritiro" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>
-                                  {ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}
-                                </span>
-                                <span
-                                  className={`rounded-full px-2 py-1 text-[10px] font-bold ${
-                                    ordine.source === "telefono"
-                                      ? "bg-orange-100 text-orange-800"
-                                      : "bg-emerald-100 text-emerald-800"
-                                  }`}
-                                >
-                                  {ordine.source === "telefono" ? "TELEFONICO" : "APP"}
-                                </span>
-                                <span className="text-[10px] text-[#82513a]">Orario richiesto: {ordine.orarioScelto}</span>
-                              </div>
-                              <div className="mt-2 flex flex-wrap gap-1">
-                                {ordine.paymentStatus === "pagato" && (
-                                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                                    PAGATO
-                                  </span>
-                                )}
-                                {ordine.paymentStatus === "da pagare" && (
-                                  <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-800">
-                                    DA INCASSARE
-                                  </span>
-                                )}
-                                {ordine.needsPos && ordine.paymentStatus === "da pagare" && (
-                                  <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-900">
-                                    PORTARE POS
-                                  </span>
-                                )}
-                                {ordine.paymentMethod === "cash_on_delivery" && ordine.paymentStatus === "da pagare" && (
-                                  <span className="rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-bold text-stone-800">
-                                    CONTANTI
-                                  </span>
-                                )}
-                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.printed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>
-                                  {ordine.printed ? "COMANDA STAMPATA" : "DA STAMPARE"}
-                                </span>
-                              </div>
-                              <p className="mt-1 text-[10px] text-[#6d4331]">
-                                Pagamento: {getPaymentMethodLabel(ordine.paymentMethod)} - {getPaymentStatusLabel(ordine.paymentStatus)}
-                              </p>
-                              <div className="mt-2 space-y-1 rounded-lg bg-[#fff7f0] p-2">
-                                {ordine.righe.map((riga) => {
-                                  const prezzoUnitario = riga.basePrezzo + riga.extra.length * EXTRA_PREZZO;
-                                  return (
-                                    <div key={`${ordine.id}-${riga.id}`} className="text-[10px] text-[#6d4331]">
-                                      <p className="font-semibold">{riga.quantita}x {riga.nome}</p>
-                                      <p>Unitario: {formatEuro(prezzoUnitario)} - Totale: {formatEuro(prezzoUnitario * riga.quantita)}</p>
-                                      {riga.extra.length > 0 && <p>Extra: {riga.extra.join(", ")}</p>}
-                                      {riga.note && <p>Note: {riga.note}</p>}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                              <p className="mt-1 text-[10px] text-[#6d4331]">Ricevuto alle {formatItalianTime(ordine.createdAt)}</p>
-                              {ordine.tipoOrdine === "consegna" && ordine.indirizzo && (
-                                <>
-                                  <p className="mt-1 text-[10px] text-[#6d4331]">
-                                    Indirizzo: {ordine.indirizzo}
-                                    {ordine.origineIndirizzo === "nuovo" ? " (nuovo indirizzo)" : ""}
-                                  </p>
-                                  <p className="mt-1 text-[10px] text-[#6d4331]">Telefono: {ordine.telefonoCliente}</p>
-                                  <p className="mt-1 text-[10px] text-[#6d4331]">Note consegna: {ordine.noteRider || "-"}</p>
-                                </>
-                              )}
-                              <p className="mt-1 text-[10px] text-[#6d4331]">
-                                Stato attuale: <span className="font-semibold">{ordine.stato}</span>
-                              </p>
-                              {!clienti.find((c) => c.id === ordine.clienteId)?.hasApp && (
-                                <span className="mt-2 inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-800">
-                                  SENZA APP
-                                </span>
-                              )}
-                              <button
-                                onClick={() => avanzaStatoOrdine(ordine.id)}
-                                disabled={ordine.stato === (ordine.tipoOrdine === "ritiro" ? "ritirato" : "consegnato")}
-                                className="mt-2 w-full rounded-lg bg-[#8f3b18] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                Avanza stato
-                              </button>
-                              <button
-                                onClick={() => apriAnteprimaComanda([ordine])}
-                                className="mt-2 w-full rounded-lg border border-[#8f3b18] bg-white px-3 py-2 text-xs font-semibold text-[#8f3b18]"
-                              >
-                                Stampa comanda
-                              </button>
-                            </article>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
+                      ))}
+                      {slotCapacityFiltered.length === 0 && <p className="rounded-xl bg-[#fff7f0] p-3 text-xs text-[#82513a]">Nessuno slot per il filtro selezionato.</p>}
+                    </div>
+                  </section>
                 </>
               )}
 
@@ -2959,28 +2757,17 @@ export default function Home() {
                     <MetricCard titolo="Fatturato oggi" valore={formatEuro(fatturatoDemo)} />
                     <MetricCard titolo="Scontrino medio" valore={formatEuro(scontrinoMedio)} />
                     <MetricCard titolo="Pizze vendute oggi" valore={String(pizzeVenduteOggi)} />
-                    <MetricCard titolo="Clienti con app" valore={String(clientiConApp.length)} />
-                    <MetricCard titolo="Clienti senza app" valore={String(clientiSenzaApp.length)} />
-                    <MetricCard titolo="Slot pieni" valore={String(slotSummary.pieni)} />
-                    <MetricCard titolo="Ordini telefonici" valore={String(ordiniTelefoniciOggi.length)} />
-                    <MetricCard titolo="Incasso online demo" valore={formatEuro(incassoOnlineSimulato)} />
-                    <MetricCard titolo="Incasso da riscuotere" valore={formatEuro(incassoDaRiscuotere)} />
-                    <MetricCard titolo="Top pizza del giorno" valore={topPizzaDelGiorno} />
-                    <MetricCard titolo="Extra più usato" valore={extraPiuUsato} />
+                    <MetricCard titolo="Comande da stampare" valore={String(comandeDaStampare)} />
+                    <MetricCard titolo="Slot critici/sovraccarichi" valore={String(slotCriticiCount)} />
                   </section>
                   <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
-                    <h2 className="font-semibold">Classifica clienti migliori</h2>
-                    <p className="mt-1 text-xs text-[#6d4331]">Questi clienti non vanno bombardati di sconti: meglio premi esclusivi e vantaggi app.</p>
-                    <div className="mt-3 space-y-2">
-                      {clientiMigliori.map((cliente) => (
-                        <article key={`top-${cliente.id}`} className="rounded-xl bg-[#fffaf6] p-3 text-xs">
-                          <p className="font-semibold text-sm">{cliente.nome}</p>
-                          <p>Totale speso: {formatEuro(cliente.totaleSpeso)}</p>
-                          <p>Numero ordini: {cliente.numeroOrdini}</p>
-                          <p>Ultimo ordine: {cliente.ultimoOrdine ? formatItalianDate(cliente.ultimoOrdine.slice(0, 10)) : "N/D"}</p>
-                          <p>Scontrino medio: {formatEuro(cliente.scontrinoMedioCliente)}</p>
-                        </article>
-                      ))}
+                    <h2 className="font-semibold">Riepilogo operativo breve</h2>
+                    <div className="mt-3 space-y-2 text-sm text-[#6d4331]">
+                      <p>Ordini telefonici oggi: <span className="font-semibold">{ordiniTelefoniciOggi.length}</span></p>
+                      <p>Incasso online simulato: <span className="font-semibold">{formatEuro(incassoOnlineSimulato)}</span></p>
+                      <p>Incasso da riscuotere: <span className="font-semibold">{formatEuro(incassoDaRiscuotere)}</span></p>
+                      <p>Slot pieni: <span className="font-semibold">{slotSummary.pieni}</span> - Quasi pieni: <span className="font-semibold">{slotSummary.quasiPieni}</span></p>
+                      <p>Top pizza del giorno: <span className="font-semibold">{topPizzaDelGiorno}</span> - Extra piu usato: <span className="font-semibold">{extraPiuUsato}</span></p>
                     </div>
                   </section>
                 </>
