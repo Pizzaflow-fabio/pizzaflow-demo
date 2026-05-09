@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type AppView = "cliente" | "admin";
-type ClienteTab = "home" | "menu" | "carrello" | "storico" | "profilo";
+type ClienteTab = "home" | "menu" | "carrello" | "storico" | "notifiche" | "profilo";
 type TipoOrdine = "ritiro" | "consegna";
 type AdminFiltro = "tutti" | "ritiro" | "consegna";
 type KanbanColonna =
@@ -50,6 +50,7 @@ type IndirizzoSalvato = {
 };
 
 type ProfiloClienteDemo = {
+  id: string;
   nome: string;
   telefono: string;
   email: string;
@@ -109,6 +110,20 @@ type PaymentStatus = "da pagare" | "pagato";
 type OrderSource = "app" | "telefono" | "admin";
 type CustomerSource = "app" | "telefono";
 
+type TimelineEventoOrdine = {
+  at: string;
+  messaggio: string;
+};
+
+type NotificaClienteApp = {
+  id: string;
+  clienteId: string;
+  ordineId?: string;
+  createdAt: string;
+  testo: string;
+  letta: boolean;
+};
+
 type Ordine = {
   id: string;
   clienteId: string;
@@ -138,6 +153,13 @@ type Ordine = {
   archived: boolean;
   archivedAt?: string;
   serviceDate: string;
+  isLargeOrder?: boolean;
+  requiresManualConfirmation?: boolean;
+  largeOrderConfirmed?: boolean;
+  proposedTime?: string;
+  awaitingCustomerTimeConfirmation?: boolean;
+  eventiTimeline?: TimelineEventoOrdine[];
+  adminOrdineBadgeExtra?: "nuovo_orario_accettato" | "cliente_da_ricontattare";
 };
 
 type Cliente = {
@@ -187,6 +209,14 @@ const DEFAULT_SLOT_CAPACITY: SlotCapacityConfig = {
   deliveriesPerRiderPerSlot: 2,
   maxPizzasPerDeliveryOrder: 20,
 };
+
+/** Soglie demo ordini grandi (visibili anche in Admin → Capacità) */
+const ORDER_SIZE_THRESHOLDS = {
+  normalOrderMaxPizzas: 12,
+  largeOrderMinPizzas: 13,
+  largeOrderMaxPizzas: 30,
+  hugeOrderMinPizzas: 31,
+} as const;
 
 const PIPELINE_RITIRO: StatoOrdine[] = [
   "ricevuto",
@@ -472,6 +502,7 @@ function buildOrdiniDemoIniziali(): Ordine[] {
 }
 
 const PROFILO_CLIENTE_DEMO: ProfiloClienteDemo = {
+  id: "c1",
   nome: "Giulia Bianchi",
   telefono: "333 1002001",
   email: "giulia.bianchi@email.demo",
@@ -542,6 +573,26 @@ function getExtraPrezzo(extra: string) {
 
 function getTotaleExtra(extra: string[]) {
   return extra.reduce((acc, item) => acc + getExtraPrezzo(item), 0);
+}
+
+function buildRigaCarrelloSignature(row: Pick<RigaCarrello, "pizzaId" | "extra" | "note" | "ingredientiRimossi">) {
+  const extra = [...row.extra].sort().join("|");
+  const ingredientiRimossi = [...(row.ingredientiRimossi ?? [])].sort().join("|");
+  return [row.pizzaId, extra, ingredientiRimossi, row.note.trim().toLowerCase()].join("::");
+}
+
+function mergeCarrelloRighe(righe: RigaCarrello[]): RigaCarrello[] {
+  const merged = new Map<string, RigaCarrello>();
+  for (const r of righe) {
+    const sig = buildRigaCarrelloSignature(r);
+    const prev = merged.get(sig);
+    if (prev) {
+      merged.set(sig, { ...prev, quantita: prev.quantita + r.quantita });
+    } else {
+      merged.set(sig, { ...r });
+    }
+  }
+  return [...merged.values()];
 }
 
 function normalizzaTelefono(telefono: string) {
@@ -686,6 +737,98 @@ function generaSlotOrari() {
   return slots;
 }
 
+function contaPizzeOrdine(righe: RigaCarrello[]): number {
+  return righe.reduce((acc, r) => acc + r.quantita, 0);
+}
+
+function appendEventoTimeline(ordine: Ordine, messaggio: string): Ordine {
+  const at = new Date().toISOString();
+  return {
+    ...ordine,
+    eventiTimeline: [...(ordine.eventiTimeline ?? []), { at, messaggio }],
+  };
+}
+
+function buildWhatsappMessaggioOrdineGrandeConfermato(ordine: Ordine): string {
+  return `Ciao ${ordine.clienteNome}, il tuo ordine grande PizzaFlow è confermato per le ${ordine.orarioScelto}. Totale: ${formatEuro(ordine.totaleFinale)}. Grazie!`;
+}
+
+function buildWhatsappMessaggioOrdineGrandeOrario(ordine: Ordine): string {
+  const modo = ordine.tipoOrdine === "ritiro" ? "ritiro" : "consegna";
+  const orarioProposta = ordine.proposedTime ?? ordine.orarioScelto;
+  return `Ciao ${ordine.clienteNome}, per il tuo ordine grande ti proponiamo il ${modo} alle ${orarioProposta}. Rispondici per confermare.`;
+}
+
+function messaggioNotificaStatoOrdine(ordineId: string, stato: StatoOrdine): string | null {
+  switch (stato) {
+    case "accettato":
+      return `Il tuo ordine ${ordineId} è stato confermato dalla pizzeria.`;
+    case "in preparazione":
+      return `Il tuo ordine ${ordineId} è in preparazione.`;
+    case "pronto per il ritiro":
+      return `Il tuo ordine ${ordineId} è pronto per il ritiro.`;
+    case "in consegna":
+      return `Il rider è in consegna per l'ordine ${ordineId}.`;
+    case "ritirato":
+    case "consegnato":
+      return `Il tuo ordine ${ordineId} è stato completato. Grazie!`;
+    default:
+      return null;
+  }
+}
+
+function AdminDettaglioOrdineBlock({
+  ordine,
+  expanded,
+  onToggleExpand,
+}: {
+  ordine: Ordine;
+  expanded: boolean;
+  onToggleExpand: () => void;
+}) {
+  const totalePizze = contaPizzeOrdine(ordine.righe);
+  const totaleRighe = ordine.righe.length;
+  const previewLines = 3;
+  const visibleRighe = expanded ? ordine.righe : ordine.righe.slice(0, previewLines);
+  const altriProdotti = Math.max(0, ordine.righe.length - previewLines);
+
+  return (
+    <div className="mt-2 rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-2 text-[11px] leading-snug text-[#3a1f12]">
+      <p className="font-semibold uppercase tracking-wide text-[#9a715c]">Dettaglio ordine</p>
+      <p className="mt-1 font-semibold text-[#3a1f12]">Totale pizze: {totalePizze}</p>
+      <p className="text-[#6d4331]">Totale righe prodotti: {totaleRighe}</p>
+      <div className="mt-2 space-y-2 border-t border-[#f0d7c7] pt-2">
+        {visibleRighe.map((riga) => (
+          <div key={riga.id}>
+            <p className="font-semibold">
+              {riga.quantita}x {riga.nome}
+            </p>
+            {riga.extra.length > 0 ? (
+              <p className="ml-2 text-[#6d4331]">Extra: {riga.extra.join(", ")}</p>
+            ) : null}
+            {riga.ingredientiRimossi && riga.ingredientiRimossi.length > 0 ? (
+              <p className="ml-2 text-[#6d4331]">Senza: {riga.ingredientiRimossi.join(", ")}</p>
+            ) : null}
+            {riga.note.trim() ? <p className="ml-2 text-[#6d4331]">Note: {riga.note}</p> : null}
+          </div>
+        ))}
+      </div>
+      {!expanded && altriProdotti > 0 ? (
+        <p className="mt-2 font-medium text-[#82513a]">+ altri {altriProdotti} prodotti</p>
+      ) : null}
+      {ordine.righe.length > previewLines ? (
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          className="mt-2 w-full rounded-lg border border-[#d59e7d] bg-white py-2 text-xs font-semibold text-[#8f3b18]"
+        >
+          {expanded ? "Nascondi dettagli" : "Mostra dettagli"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function calcolaCostoConsegna(subtotale: number, tipoOrdine: TipoOrdine) {
   if (tipoOrdine === "ritiro") return 0;
   return subtotale >= 25 ? 0 : 2.5;
@@ -826,6 +969,9 @@ const KANBAN_COLUMNS: Array<{ key: KanbanColonna; titolo: string }> = [
 
 export default function Home() {
   const skipTipoOrdinePaymentReset = useRef(false);
+  const adminClienteWhatsappCopyCloseTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(
+    null
+  );
   const [view, setView] = useState<AppView>("cliente");
   const [tabCliente, setTabCliente] = useState<ClienteTab>("home");
   const [carrello, setCarrello] = useState<RigaCarrello[]>([]);
@@ -862,6 +1008,19 @@ export default function Home() {
   });
   const [profileDemoSavedNotice, setProfileDemoSavedNotice] = useState("");
   const [showReorderPicker, setShowReorderPicker] = useState(false);
+  const [showSvuotaCarrelloModal, setShowSvuotaCarrelloModal] = useState(false);
+  const [clientePreventivoNotice, setClientePreventivoNotice] = useState("");
+  const [adminOrdineAzioniNotice, setAdminOrdineAzioniNotice] = useState("");
+  const [adminOrdineDettaglioEspanso, setAdminOrdineDettaglioEspanso] = useState<Record<string, boolean>>({});
+  const [adminModificaOrarioOrdineId, setAdminModificaOrarioOrdineId] = useState<string | null>(null);
+  const [adminModificaOrarioDraft, setAdminModificaOrarioDraft] = useState("");
+  const [adminClienteWhatsappUltimo, setAdminClienteWhatsappUltimo] = useState<{
+    ordineId: string;
+    text: string;
+  } | null>(null);
+  const [adminClienteWhatsappPanelOpen, setAdminClienteWhatsappPanelOpen] = useState(false);
+  const [adminMessaggioClienteCopied, setAdminMessaggioClienteCopied] = useState("");
+  const [notificheCliente, setNotificheCliente] = useState<NotificaClienteApp[]>([]);
   const [reorderNotice, setReorderNotice] = useState("");
   const [showCreatePreferredInfo, setShowCreatePreferredInfo] = useState(false);
   const [showSavePreferredForm, setShowSavePreferredForm] = useState(false);
@@ -1062,118 +1221,146 @@ export default function Home() {
   );
   const ordiniAttiviPerSlot = useMemo(
     () =>
-      ordiniOperativiOggi.filter(
-        (o) =>
-          !["ritirato", "consegnato", "completato", "annullato"].includes(o.stato)
-      ),
+      ordiniOperativiOggi.filter((o) => {
+        if (["ritirato", "consegnato", "completato", "annullato"].includes(o.stato)) return false;
+        if (o.requiresManualConfirmation && !o.largeOrderConfirmed) return false;
+        return true;
+      }),
     [ordiniOperativiOggi]
   );
   const calcolaSlotCapacity = useMemo(
-    () => (pizzeRichieste: number, tipoOrdineSlot: TipoOrdine) =>
-      generaSlotOrari().map((slot) => {
-        const ordiniSlot = ordiniAttiviPerSlot.filter((o) => o.orarioScelto === slot);
-        const ordiniRitiro = ordiniSlot.filter((o) => o.tipoOrdine === "ritiro");
-        const ordiniConsegna = ordiniSlot.filter((o) => o.tipoOrdine === "consegna");
-        const pickupOrders = ordiniRitiro.length;
-        const deliveryOrders = ordiniConsegna.length;
-        const pickupPizzas = ordiniRitiro.reduce(
-          (acc, ordine) => acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
-          0
-        );
-        const deliveryPizzas = ordiniConsegna.reduce(
-          (acc, ordine) => acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
-          0
-        );
-        const totalPizzas = pickupPizzas + deliveryPizzas;
-        const totalResidualPizzas = slotCapacityConfig.maxTotalPizzasPerSlot - totalPizzas;
-        const pickupResidualOrders = slotCapacityConfig.maxPickupOrdersPerSlot - pickupOrders;
-        const deliveryResidualOrders = slotCapacityConfig.maxDeliveryOrdersPerSlot - deliveryOrders;
-        const pickupResidualPizzas = Math.min(
-          slotCapacityConfig.maxPickupPizzasPerSlot - pickupPizzas,
-          totalResidualPizzas
-        );
-        const deliveryResidualPizzas = Math.max(
-          slotCapacityConfig.maxDeliveryPizzasPerSlot - deliveryPizzas,
-          0
-        );
-        const pickupStatus = getSlotStatus(
-          pickupOrders,
-          pickupPizzas,
-          slotCapacityConfig.maxPickupOrdersPerSlot,
-          slotCapacityConfig.maxPickupPizzasPerSlot
-        );
-        const deliveryStatus = getSlotStatus(
-          deliveryOrders,
-          deliveryOrders,
-          slotCapacityConfig.maxDeliveryOrdersPerSlot,
-          slotCapacityConfig.maxDeliveryOrdersPerSlot
-        );
-        const kitchenFull = totalResidualPizzas <= 0;
-        const pickupOverloaded = pickupPizzas > slotCapacityConfig.maxPickupPizzasPerSlot;
-        const deliveryOverloaded = deliveryOrders > slotCapacityConfig.maxDeliveryOrdersPerSlot;
-        const kitchenOverloaded = totalPizzas > slotCapacityConfig.maxTotalPizzasPerSlot;
-        const pickupFull = pickupStatus === "pieno" || kitchenFull;
-        const deliveryFull = deliveryStatus === "pieno" || kitchenFull;
-        const riderLimited =
-          slotCapacityConfig.ridersAvailable <= 0 ||
-          deliveryResidualOrders <= Math.ceil(slotCapacityConfig.deliveriesPerRiderPerSlot);
-        const exceedsDeliveryOrderPizzaLimit =
-          tipoOrdineSlot === "consegna" &&
-          pizzeRichieste > slotCapacityConfig.maxPizzasPerDeliveryOrder;
-        const insufficientKitchenForOrder = totalResidualPizzas < Math.max(pizzeRichieste, 1);
-        const selectedResidualOrders =
-          tipoOrdineSlot === "ritiro" ? pickupResidualOrders : deliveryResidualOrders;
-        const selectedResidualPizzas = Math.max(
-          tipoOrdineSlot === "ritiro" ? pickupResidualPizzas : totalResidualPizzas,
-          0
-        );
-        const selectedOverloaded =
-          tipoOrdineSlot === "ritiro" ? pickupOverloaded || kitchenOverloaded : deliveryOverloaded || kitchenOverloaded;
-        const selectedFull = (tipoOrdineSlot === "ritiro" ? pickupFull : deliveryFull) || selectedOverloaded;
-        const nonDisponibilePerOrdine =
-          !selectedFull &&
-          (
-            selectedResidualOrders < 1 ||
-            selectedResidualPizzas < Math.max(pizzeRichieste, 1) ||
-            exceedsDeliveryOrderPizzaLimit ||
-            insufficientKitchenForOrder
+    () =>
+      (pizzeRichieste: number, tipoOrdineSlot: TipoOrdine, bookingMode: "cliente" | "admin-manual") =>
+        generaSlotOrari().map((slot) => {
+          const ordiniSlot = ordiniAttiviPerSlot.filter((o) => o.orarioScelto === slot);
+          const ordiniRitiro = ordiniSlot.filter((o) => o.tipoOrdine === "ritiro");
+          const ordiniConsegna = ordiniSlot.filter((o) => o.tipoOrdine === "consegna");
+          const pickupOrders = ordiniRitiro.length;
+          const deliveryOrders = ordiniConsegna.length;
+          const pickupPizzas = ordiniRitiro.reduce(
+            (acc, ordine) => acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
+            0
           );
-        const selezionabile = !selectedFull && !nonDisponibilePerOrdine;
-        return {
-          slot,
-          pickupOrders,
-          deliveryOrders,
-          pickupPizzas,
-          deliveryPizzas,
-          totalPizzas,
-          pickupResidualOrders,
-          deliveryResidualOrders,
-          pickupResidualPizzas,
-          deliveryResidualPizzas,
-          totalResidualPizzas,
-          pickupStatus,
-          deliveryStatus,
-          kitchenFull,
-          riderLimited,
-          exceedsDeliveryOrderPizzaLimit,
-          insufficientKitchenForOrder,
-          pickupOverloaded,
-          deliveryOverloaded,
-          kitchenOverloaded,
-          stato: tipoOrdineSlot === "ritiro" ? pickupStatus : deliveryStatus,
-          full: selectedFull,
-          nonDisponibilePerOrdine,
-          selezionabile,
-        };
-      }),
+          const deliveryPizzas = ordiniConsegna.reduce(
+            (acc, ordine) => acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
+            0
+          );
+          const totalPizzas = pickupPizzas + deliveryPizzas;
+          const totalResidualPizzas = slotCapacityConfig.maxTotalPizzasPerSlot - totalPizzas;
+          const pickupResidualOrders = slotCapacityConfig.maxPickupOrdersPerSlot - pickupOrders;
+          const deliveryResidualOrders = slotCapacityConfig.maxDeliveryOrdersPerSlot - deliveryOrders;
+          const pickupResidualPizzas = Math.min(
+            slotCapacityConfig.maxPickupPizzasPerSlot - pickupPizzas,
+            totalResidualPizzas
+          );
+          const deliveryResidualPizzas = Math.max(
+            slotCapacityConfig.maxDeliveryPizzasPerSlot - deliveryPizzas,
+            0
+          );
+          const pickupStatus = getSlotStatus(
+            pickupOrders,
+            pickupPizzas,
+            slotCapacityConfig.maxPickupOrdersPerSlot,
+            slotCapacityConfig.maxPickupPizzasPerSlot
+          );
+          const deliveryStatus = getSlotStatus(
+            deliveryOrders,
+            deliveryPizzas,
+            slotCapacityConfig.maxDeliveryOrdersPerSlot,
+            slotCapacityConfig.maxDeliveryPizzasPerSlot
+          );
+          const kitchenFull = totalResidualPizzas <= 0;
+          const pickupOverloaded = pickupPizzas > slotCapacityConfig.maxPickupPizzasPerSlot;
+          const deliveryOverloaded = deliveryOrders > slotCapacityConfig.maxDeliveryOrdersPerSlot;
+          const kitchenOverloaded = totalPizzas > slotCapacityConfig.maxTotalPizzasPerSlot;
+          const pickupFull = pickupStatus === "pieno" || kitchenFull;
+          const deliveryFull = deliveryStatus === "pieno" || kitchenFull;
+          const riderLimited =
+            slotCapacityConfig.ridersAvailable <= 0 ||
+            deliveryResidualOrders <= Math.ceil(slotCapacityConfig.deliveriesPerRiderPerSlot);
+          const exceedsDeliveryOrderPizzaLimit =
+            tipoOrdineSlot === "consegna" &&
+            pizzeRichieste > slotCapacityConfig.maxPizzasPerDeliveryOrder;
+          const insufficientKitchenForOrder = totalResidualPizzas < Math.max(pizzeRichieste, 1);
+          const selectedResidualOrders =
+            tipoOrdineSlot === "ritiro" ? pickupResidualOrders : deliveryResidualOrders;
+          const selectedResidualPizzas = Math.max(
+            tipoOrdineSlot === "ritiro" ? pickupResidualPizzas : totalResidualPizzas,
+            0
+          );
+          const selectedOverloaded =
+            tipoOrdineSlot === "ritiro" ? pickupOverloaded || kitchenOverloaded : deliveryOverloaded || kitchenOverloaded;
+          const selectedFull = (tipoOrdineSlot === "ritiro" ? pickupFull : deliveryFull) || selectedOverloaded;
+          /** Ritiro 13–30: niente blocco su capacità standard pickup/cucina — solo richiesta confermabile */
+          const isClienteRitiroLargeBand =
+            bookingMode === "cliente" &&
+            tipoOrdineSlot === "ritiro" &&
+            pizzeRichieste >= ORDER_SIZE_THRESHOLDS.largeOrderMinPizzas &&
+            pizzeRichieste <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas;
+          const nonDisponibilePerOrdine = isClienteRitiroLargeBand
+            ? false
+            : !selectedFull &&
+              (selectedResidualOrders < 1 ||
+                selectedResidualPizzas < Math.max(pizzeRichieste, 1) ||
+                exceedsDeliveryOrderPizzaLimit ||
+                insufficientKitchenForOrder);
+          let selezionabile = !selectedFull && !nonDisponibilePerOrdine;
+          let clienteSlotLabel: string | undefined;
+
+          if (bookingMode === "admin-manual") {
+            selezionabile = !selectedFull;
+            clienteSlotLabel = undefined;
+          } else if (pizzeRichieste >= ORDER_SIZE_THRESHOLDS.hugeOrderMinPizzas) {
+            selezionabile = false;
+            clienteSlotLabel = "Non disponibile";
+          } else if (isClienteRitiroLargeBand) {
+            selezionabile = true;
+            clienteSlotLabel = "Ordine grande - conferma pizzeria";
+          } else if (
+            tipoOrdineSlot === "consegna" &&
+            pizzeRichieste > slotCapacityConfig.maxPizzasPerDeliveryOrder &&
+            pizzeRichieste <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas
+          ) {
+            selezionabile = !kitchenFull;
+            clienteSlotLabel = kitchenFull ? "Non disponibile" : "Consegna grande - conferma pizzeria";
+          }
+
+          return {
+            slot,
+            pickupOrders,
+            deliveryOrders,
+            pickupPizzas,
+            deliveryPizzas,
+            totalPizzas,
+            pickupResidualOrders,
+            deliveryResidualOrders,
+            pickupResidualPizzas,
+            deliveryResidualPizzas,
+            totalResidualPizzas,
+            pickupStatus,
+            deliveryStatus,
+            kitchenFull,
+            riderLimited,
+            exceedsDeliveryOrderPizzaLimit,
+            insufficientKitchenForOrder,
+            pickupOverloaded,
+            deliveryOverloaded,
+            kitchenOverloaded,
+            stato: tipoOrdineSlot === "ritiro" ? pickupStatus : deliveryStatus,
+            full: selectedFull,
+            nonDisponibilePerOrdine,
+            selezionabile,
+            clienteSlotLabel,
+          };
+        }),
     [ordiniAttiviPerSlot, slotCapacityConfig]
   );
   const slotCapacity = useMemo(
-    () => calcolaSlotCapacity(pizzeNelCarrello, tipoOrdine),
+    () => calcolaSlotCapacity(pizzeNelCarrello, tipoOrdine, "cliente"),
     [calcolaSlotCapacity, pizzeNelCarrello, tipoOrdine]
   );
   const adminSlotCapacity = useMemo(
-    () => calcolaSlotCapacity(1, "ritiro"),
+    () => calcolaSlotCapacity(1, "ritiro", "admin-manual"),
     [calcolaSlotCapacity]
   );
   const slotSummary = useMemo(
@@ -1217,10 +1404,12 @@ export default function Home() {
     () => slotCapacity.find((s) => s.slot === orarioScelto),
     [orarioScelto, slotCapacity]
   );
+  const clienteOrdineHuge = pizzeNelCarrello >= ORDER_SIZE_THRESHOLDS.hugeOrderMinPizzas;
   const canShowPaymentSection =
-    tipoOrdine === "ritiro"
+    !clienteOrdineHuge &&
+    (tipoOrdine === "ritiro"
       ? Boolean(orarioScelto && selectedSlotInfo?.selezionabile)
-      : Boolean(indirizzoConsegnaSelezionato && orarioScelto && selectedSlotInfo?.selezionabile);
+      : Boolean(indirizzoConsegnaSelezionato && orarioScelto && selectedSlotInfo?.selezionabile));
   const manualPizzaCount = useMemo(
     () => manualRows.reduce((acc, item) => acc + item.quantita, 0),
     [manualRows]
@@ -1239,7 +1428,7 @@ export default function Home() {
   );
   const manualTotal = manualSubtotal + manualDeliveryCost;
   const manualSlotCapacity = useMemo(
-    () => calcolaSlotCapacity(manualPizzaCount, manualTipoOrdine),
+    () => calcolaSlotCapacity(manualPizzaCount, manualTipoOrdine, "admin-manual"),
     [calcolaSlotCapacity, manualPizzaCount, manualTipoOrdine]
   );
   const manualSelectedSlotInfo = useMemo(
@@ -1283,10 +1472,18 @@ export default function Home() {
   );
   const ordiniPerStoricoCliente = useMemo(
     () =>
-      [...ordini].sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      ),
-    [ordini]
+      [...ordini]
+        .filter((o) => o.clienteId === profiloCliente.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [ordini, profiloCliente.id]
+  );
+  const notificheClienteCorrente = useMemo(
+    () => notificheCliente.filter((n) => n.clienteId === profiloCliente.id),
+    [notificheCliente, profiloCliente.id]
+  );
+  const notificheClienteNonLette = useMemo(
+    () => notificheClienteCorrente.filter((n) => !n.letta).length,
+    [notificheClienteCorrente]
   );
   const pizzaStats = useMemo(() => {
     const totalePizze = Math.max(
@@ -1469,33 +1666,262 @@ export default function Home() {
   function aggiungiPizza() {
     if (!pizzaSelezionata) return;
     const nomePizza = pizzaSelezionata.nome;
-    const nuovaRiga: RigaCarrello = {
-      id: crypto.randomUUID(),
+    const noteTrim = notePizza.trim();
+    const candidate: Pick<RigaCarrello, "pizzaId" | "extra" | "note" | "ingredientiRimossi"> = {
       pizzaId: pizzaSelezionata.id,
-      nome: pizzaSelezionata.nome,
-      basePrezzo: pizzaSelezionata.prezzo,
-      extra: extraSelezionati,
-      note: notePizza,
-      quantita: 1,
+      extra: [...extraSelezionati],
+      note: noteTrim,
+      ingredientiRimossi: undefined,
     };
-    setCarrello((prev) => [...prev, nuovaRiga]);
+    const sig = buildRigaCarrelloSignature(candidate);
+    setCarrello((prev) => {
+      const idx = prev.findIndex((r) => buildRigaCarrelloSignature(r) === sig);
+      if (idx !== -1) {
+        return prev.map((r, i) => (i === idx ? { ...r, quantita: r.quantita + 1 } : r));
+      }
+      const nuovaRiga: RigaCarrello = {
+        id: crypto.randomUUID(),
+        pizzaId: pizzaSelezionata.id,
+        nome: pizzaSelezionata.nome,
+        basePrezzo: pizzaSelezionata.prezzo,
+        extra: [...extraSelezionati],
+        note: noteTrim,
+        quantita: 1,
+      };
+      return [...prev, nuovaRiga];
+    });
     setPizzaSelezionata(null);
     setExtraSelezionati([]);
     setNotePizza("");
     setMenuAddToast(`${nomePizza} aggiunta al carrello`);
   }
 
+  function incrementQuantitaCarrello(rigaId: string) {
+    setCarrello((prev) =>
+      prev.map((r) => (r.id === rigaId ? { ...r, quantita: r.quantita + 1 } : r))
+    );
+  }
+
+  function decrementQuantitaCarrello(rigaId: string) {
+    setCarrello((prev) =>
+      prev.map((r) =>
+        r.id === rigaId ? { ...r, quantita: Math.max(1, r.quantita - 1) } : r
+      )
+    );
+  }
+
+  function rimuoviRigaCarrello(rigaId: string) {
+    setCarrello((prev) => prev.filter((r) => r.id !== rigaId));
+  }
+
+  function confermaSvuotaCarrello() {
+    setCarrello([]);
+    setShowSvuotaCarrelloModal(false);
+  }
+
+  function chiudiModalSvuotaCarrello() {
+    setShowSvuotaCarrelloModal(false);
+  }
+
+  function toggleAdminDettaglioOrdine(ordineId: string) {
+    setAdminOrdineDettaglioEspanso((prev) => ({ ...prev, [ordineId]: !prev[ordineId] }));
+  }
+
+  function impostaNuovoMessaggioWhatsappAdmin(payload: { ordineId: string; text: string }) {
+    if (adminClienteWhatsappCopyCloseTimerRef.current) {
+      window.clearTimeout(adminClienteWhatsappCopyCloseTimerRef.current);
+      adminClienteWhatsappCopyCloseTimerRef.current = null;
+    }
+    setAdminClienteWhatsappUltimo(payload);
+    setAdminClienteWhatsappPanelOpen(true);
+    setAdminMessaggioClienteCopied("");
+  }
+
+  function chiudiPanelMessaggioClienteAdmin() {
+    if (adminClienteWhatsappCopyCloseTimerRef.current) {
+      window.clearTimeout(adminClienteWhatsappCopyCloseTimerRef.current);
+      adminClienteWhatsappCopyCloseTimerRef.current = null;
+    }
+    setAdminClienteWhatsappPanelOpen(false);
+    setAdminMessaggioClienteCopied("");
+  }
+
+  function confermaOrdineGrandeAdmin(ordineId: string) {
+    const ordine = ordini.find((o) => o.id === ordineId);
+    if (!ordine) return;
+    const aggiornato = appendEventoTimeline(
+      {
+        ...ordine,
+        largeOrderConfirmed: true,
+        requiresManualConfirmation: false,
+        stato: "accettato",
+      },
+      `Ordine grande confermato dalla pizzeria per le ${ordine.orarioScelto}`
+    );
+    setOrdini((prev) => prev.map((o) => (o.id === ordineId ? aggiornato : o)));
+    setAdminOrdineAzioniNotice("Ordine grande confermato. Ora conta sulla capacità slot.");
+    impostaNuovoMessaggioWhatsappAdmin({
+      ordineId,
+      text: buildWhatsappMessaggioOrdineGrandeConfermato(aggiornato),
+    });
+    aggiungiNotificaCliente(
+      ordine.clienteId,
+      `Il tuo ordine grande ${ordine.id} è stato confermato dalla pizzeria per le ${ordine.orarioScelto}.`,
+      ordine.id
+    );
+  }
+
+  function apriModificaOrarioAdmin(ordineId: string) {
+    const ordine = ordini.find((o) => o.id === ordineId);
+    if (!ordine) return;
+    setAdminModificaOrarioOrdineId(ordineId);
+    setAdminModificaOrarioDraft(ordine.proposedTime ?? ordine.orarioScelto);
+  }
+
+  function chiudiModificaOrarioAdmin() {
+    setAdminModificaOrarioOrdineId(null);
+  }
+
+  function salvaModificaOrarioAdmin() {
+    if (!adminModificaOrarioOrdineId) return;
+    const nuovoOrario = adminModificaOrarioDraft;
+    const ordineVecchio = ordini.find((o) => o.id === adminModificaOrarioOrdineId);
+    if (!ordineVecchio) {
+      setAdminModificaOrarioOrdineId(null);
+      return;
+    }
+    const aggiornato = appendEventoTimeline(
+      {
+        ...ordineVecchio,
+        proposedTime: nuovoOrario,
+        awaitingCustomerTimeConfirmation: true,
+        adminOrdineBadgeExtra: undefined,
+      },
+      `La pizzeria propone il nuovo orario ${nuovoOrario} per questo ordine`
+    );
+    setOrdini((prev) =>
+      prev.map((o) => (o.id === adminModificaOrarioOrdineId ? aggiornato : o))
+    );
+    setAdminModificaOrarioOrdineId(null);
+    setAdminOrdineAzioniNotice("Orario proposto al cliente. In attesa di conferma.");
+    impostaNuovoMessaggioWhatsappAdmin({
+      ordineId: aggiornato.id,
+      text: buildWhatsappMessaggioOrdineGrandeOrario(aggiornato),
+    });
+    aggiungiNotificaCliente(
+      aggiornato.clienteId,
+      `La pizzeria propone il nuovo orario ${nuovoOrario} per il tuo ordine ${aggiornato.id}.`,
+      aggiornato.id
+    );
+  }
+
+  function aggiungiNotificaCliente(clienteId: string, testo: string, ordineId?: string) {
+    setNotificheCliente((prev) => [
+      {
+        id: `ntf-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        clienteId,
+        ordineId,
+        createdAt: new Date().toISOString(),
+        testo,
+        letta: false,
+      },
+      ...prev,
+    ]);
+  }
+
+  const apriTabCliente = useCallback(
+    (tab: ClienteTab) => {
+      if (tab === "storico" || tab === "notifiche") {
+        setNotificheCliente((prev) =>
+          prev.map((n) => (n.clienteId === profiloCliente.id ? { ...n, letta: true } : n))
+        );
+      }
+      setTabCliente(tab);
+    },
+    [profiloCliente.id]
+  );
+
+  function clienteAccettaNuovoOrario(ordineId: string) {
+    setOrdini((prev) =>
+      prev.map((o) => {
+        if (o.id !== ordineId || !o.awaitingCustomerTimeConfirmation || !o.proposedTime) return o;
+        let next: Ordine = {
+          ...o,
+          orarioScelto: o.proposedTime,
+          proposedTime: undefined,
+          awaitingCustomerTimeConfirmation: false,
+          adminOrdineBadgeExtra: "nuovo_orario_accettato",
+        };
+        next = appendEventoTimeline(next, "Cliente ha accettato il nuovo orario");
+        return next;
+      })
+    );
+    aggiungiNotificaCliente(
+      profiloCliente.id,
+      `Hai accettato il nuovo orario per l'ordine ${ordineId}.`,
+      ordineId
+    );
+  }
+
+  function clienteRifiutaNuovoOrario(ordineId: string) {
+    setOrdini((prev) =>
+      prev.map((o) => {
+        if (o.id !== ordineId || !o.awaitingCustomerTimeConfirmation) return o;
+        let next: Ordine = {
+          ...o,
+          proposedTime: undefined,
+          awaitingCustomerTimeConfirmation: false,
+          adminOrdineBadgeExtra: "cliente_da_ricontattare",
+        };
+        next = appendEventoTimeline(next, "Cliente non ha accettato il nuovo orario");
+        return next;
+      })
+    );
+    aggiungiNotificaCliente(
+      profiloCliente.id,
+      `Hai scelto di essere ricontattato per l'ordine ${ordineId}.`,
+      ordineId
+    );
+  }
+
+  async function copiaAdminMessaggioCliente(testo: string) {
+    if (!testo) return;
+    let ok = false;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(testo);
+        ok = true;
+      }
+    } catch {
+      ok = false;
+    }
+    if (ok) {
+      setAdminMessaggioClienteCopied("Messaggio copiato negli appunti.");
+      if (adminClienteWhatsappCopyCloseTimerRef.current) {
+        globalThis.clearTimeout(adminClienteWhatsappCopyCloseTimerRef.current);
+      }
+      adminClienteWhatsappCopyCloseTimerRef.current = globalThis.setTimeout(() => {
+        adminClienteWhatsappCopyCloseTimerRef.current = null;
+        setAdminClienteWhatsappPanelOpen(false);
+        setAdminMessaggioClienteCopied("");
+      }, 3000);
+    } else {
+      setAdminMessaggioClienteCopied("Copia non disponibile: seleziona il testo.");
+    }
+  }
+
   function confermaOrdine() {
     if (!carrello.length) return;
     if (consegnaInvalida) return;
     if (onlinePaymentPending) return;
+    const createdAtIso = new Date().toISOString();
     const nuovoOrdine: Ordine = {
       id: `PF-${2000 + ordini.length + 1}`,
-      clienteId: "c1",
+      clienteId: profiloCliente.id,
       clienteNome: "Giulia B.",
       orderDate: getTodayOrderDate(),
-      createdAt: new Date().toISOString(),
-      dataISO: new Date().toISOString(),
+      createdAt: createdAtIso,
+      dataISO: createdAtIso,
       tipoOrdine,
       orarioScelto,
       stato: "ricevuto",
@@ -1519,6 +1945,21 @@ export default function Home() {
       printed: false,
       archived: false,
       serviceDate: getTodayOrderDate(),
+      isLargeOrder:
+        (tipoOrdine === "ritiro" &&
+          pizzeNelCarrello >= ORDER_SIZE_THRESHOLDS.largeOrderMinPizzas &&
+          pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas) ||
+        (tipoOrdine === "consegna" &&
+          pizzeNelCarrello > slotCapacityConfig.maxPizzasPerDeliveryOrder &&
+          pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas),
+      requiresManualConfirmation:
+        (tipoOrdine === "ritiro" &&
+          pizzeNelCarrello >= ORDER_SIZE_THRESHOLDS.largeOrderMinPizzas &&
+          pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas) ||
+        (tipoOrdine === "consegna" &&
+          pizzeNelCarrello > slotCapacityConfig.maxPizzasPerDeliveryOrder &&
+          pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas),
+      eventiTimeline: [{ at: createdAtIso, messaggio: "Ordine ricevuto" }],
     };
     setOrdini((prev) => [nuovoOrdine, ...prev]);
     setClienti((prev) =>
@@ -1547,7 +1988,7 @@ export default function Home() {
     setPaymentMethod("cash_at_pickup");
     setOnlinePaymentSimulated(false);
     setSimulatedPaidAt(undefined);
-    setTabCliente("storico");
+    apriTabCliente("storico");
   }
 
   function riordinaSolita() {
@@ -1557,7 +1998,12 @@ export default function Home() {
   function caricaUltimoOrdine() {
     const ultimoOrdine = ordini[0];
     if (!ultimoOrdine) return;
-    setCarrello(ultimoOrdine.righe.map((r) => ({ ...r, id: crypto.randomUUID() })));
+    const righe = ultimoOrdine.righe.map((r) => ({
+      ...r,
+      id: crypto.randomUUID(),
+      note: typeof r.note === "string" ? r.note.trim() : "",
+    }));
+    setCarrello(mergeCarrelloRighe(righe));
     skipTipoOrdinePaymentReset.current = true;
     setTipoOrdine(ultimoOrdine.tipoOrdine);
     setPaymentMethod(ultimoOrdine.paymentMethod);
@@ -1581,11 +2027,12 @@ export default function Home() {
         nome: item.nome,
         basePrezzo: pizza?.prezzo ?? 9,
         extra: item.extra,
-        note: [item.note, item.ingredientiRimossi.length ? `Senza: ${item.ingredientiRimossi.join(", ")}` : ""].filter(Boolean).join(" - "),
+        note: item.note.trim(),
+        ingredientiRimossi: item.ingredientiRimossi.length ? item.ingredientiRimossi : undefined,
         quantita: item.quantita,
       };
     });
-    setCarrello(nuoveRighe);
+    setCarrello(mergeCarrelloRighe(nuoveRighe));
     setTipoOrdine(savedOrder.tipoPreferito);
     if (savedOrder.tipoPreferito === "consegna" && savedOrder.indirizzoPreferitoId) {
       setSelectedSavedAddressId(savedOrder.indirizzoPreferitoId);
@@ -1597,16 +2044,24 @@ export default function Home() {
 
   function avanzaStatoOrdine(ordineId: string) {
     const oggi = getTodayOrderDate();
+    const target = ordini.find((o) => o.id === ordineId && !o.archived && o.serviceDate === oggi);
+    if (!target) return;
+    const pipeline = getPipelineByTipo(target.tipoOrdine);
+    const currentIndex = pipeline.indexOf(target.stato);
+    if (currentIndex === -1 || currentIndex >= pipeline.length - 1) return;
+    const nuovoStato = pipeline[currentIndex + 1];
+    const msgNotifica = messaggioNotificaStatoOrdine(target.id, nuovoStato);
     setOrdini((prev) =>
       prev.map((ordine) => {
         if (ordine.id !== ordineId) return ordine;
         if (ordine.archived || ordine.serviceDate !== oggi) return ordine;
-        const pipeline = getPipelineByTipo(ordine.tipoOrdine);
-        const currentIndex = pipeline.indexOf(ordine.stato);
-        if (currentIndex === -1 || currentIndex >= pipeline.length - 1) return ordine;
-        return { ...ordine, stato: pipeline[currentIndex + 1] };
+        const ci = pipeline.indexOf(ordine.stato);
+        if (ci === -1 || ci >= pipeline.length - 1) return ordine;
+        const ns = pipeline[ci + 1];
+        return appendEventoTimeline({ ...ordine, stato: ns }, `Stato aggiornato: ${ns}`);
       })
     );
+    if (msgNotifica) aggiungiNotificaCliente(target.clienteId, msgNotifica, target.id);
   }
 
   function avanzaTuttiOrdiniAttivi() {
@@ -1663,9 +2118,7 @@ export default function Home() {
   }
 
   function buildManualRowSignature(row: Pick<RigaCarrello, "pizzaId" | "extra" | "note" | "ingredientiRimossi">) {
-    const extra = [...row.extra].sort().join("|");
-    const ingredientiRimossi = [...(row.ingredientiRimossi ?? [])].sort().join("|");
-    return [row.pizzaId, extra, ingredientiRimossi, row.note.trim().toLowerCase()].join("::");
+    return buildRigaCarrelloSignature(row);
   }
 
   function aggiungiPizzaOrdineManuale() {
@@ -1989,6 +2442,9 @@ export default function Home() {
       printed: false,
       archived: false,
       serviceDate: getTodayOrderDate(),
+      isLargeOrder: manualPizzaCount >= ORDER_SIZE_THRESHOLDS.largeOrderMinPizzas,
+      requiresManualConfirmation: false,
+      eventiTimeline: [{ at: now.toISOString(), messaggio: "Ordine ricevuto" }],
     };
     setOrdini((prev) => [nuovoOrdine, ...prev]);
     setClienti((prev) => {
@@ -2021,6 +2477,14 @@ export default function Home() {
     setManualOrderNotice("Ordine telefonico creato: visibile in dashboard, kanban e capacità slot.");
     resetManualOrderForm();
   }
+
+  useEffect(() => {
+    return () => {
+      if (adminClienteWhatsappCopyCloseTimerRef.current) {
+        window.clearTimeout(adminClienteWhatsappCopyCloseTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!menuAddToast) return;
@@ -2098,6 +2562,104 @@ export default function Home() {
                   {reorderNotice && (
                     <p className="rounded-xl bg-[#f4dfd0] p-3 text-sm text-[#6d4331]">{reorderNotice}</p>
                   )}
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold text-[#3a1f12]">Centro notifiche</h3>
+                      {notificheClienteNonLette > 0 ? (
+                        <span className="rounded-full bg-[#8f3b18] px-2 py-0.5 text-[11px] font-bold text-white">
+                          {notificheClienteNonLette}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-[#9a715c]">Nessuna nuova</span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-[#6d4331]">
+                      Aggiornamenti dall&apos;Admin (simulazione demo, senza push reali).
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {notificheClienteCorrente.length === 0 ? (
+                        <p className="text-xs text-[#9a715c]">Non hai ancora notifiche.</p>
+                      ) : (
+                        notificheClienteCorrente.slice(0, 4).map((n) => (
+                          <button
+                            key={n.id}
+                            type="button"
+                            onClick={() => apriTabCliente("storico")}
+                            className="w-full rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-2 text-left text-xs text-[#3a1f12] active:bg-[#f4dfd0]"
+                          >
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9a715c]">
+                              {formatItalianDate(n.createdAt.slice(0, 10))} ·{" "}
+                              {formatItalianTime(n.createdAt)}
+                            </p>
+                            <p className="mt-1 leading-snug">{n.testo}</p>
+                            {n.ordineId ? (
+                              <p className="mt-1 text-[10px] font-semibold text-[#8f3b18]">Ordine {n.ordineId}</p>
+                            ) : null}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => apriTabCliente("notifiche")}
+                      className="mt-3 w-full rounded-xl border border-[#d59e7d] py-2 text-xs font-semibold text-[#8f3b18]"
+                    >
+                      Apri tutte le notifiche
+                    </button>
+                  </section>
+                </div>
+              )}
+
+              {tabCliente === "notifiche" && (
+                <div className="space-y-3">
+                  <div className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 className="text-lg font-bold text-[#3a1f12]">Centro notifiche</h2>
+                      {notificheClienteNonLette > 0 ? (
+                        <span className="rounded-full bg-[#8f3b18] px-2.5 py-1 text-xs font-bold text-white">
+                          {notificheClienteNonLette} non lette
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-[#6d4331]">
+                      Simulazione comunicazioni dalla pizzeria. Nessuna notifica push reale.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    {notificheClienteCorrente.length === 0 ? (
+                      <p className="rounded-2xl border border-[#ecd7c8] bg-[#fffaf6] p-6 text-center text-sm text-[#82513a]">
+                        Nessuna notifica.
+                      </p>
+                    ) : (
+                      notificheClienteCorrente.map((n) => (
+                        <article
+                          key={n.id}
+                          className={`rounded-2xl border p-3 text-sm ${
+                            n.letta ? "border-[#ecd7c8] bg-white" : "border-[#8f3b18]/40 bg-[#fff7f0]"
+                          }`}
+                        >
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9a715c]">
+                            {formatItalianDate(n.createdAt.slice(0, 10))} · {formatItalianTime(n.createdAt)}
+                            {!n.letta ? (
+                              <span className="ml-2 rounded-full bg-[#8f3b18] px-2 py-0.5 text-[9px] font-bold text-white">
+                                Nuova
+                              </span>
+                            ) : null}
+                          </p>
+                          <p className="mt-2 leading-relaxed text-[#3a1f12]">{n.testo}</p>
+                          {n.ordineId ? (
+                            <button
+                              type="button"
+                              onClick={() => apriTabCliente("storico")}
+                              className="mt-2 text-xs font-semibold text-[#8f3b18] underline-offset-2 hover:underline"
+                            >
+                              Vedi ordine {n.ordineId} nello storico
+                            </button>
+                          ) : null}
+                        </article>
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -2128,27 +2690,128 @@ export default function Home() {
 
               {tabCliente === "carrello" && (
                 <div className="space-y-4">
-                  {!carrello.length && <p className="rounded-2xl bg-white p-4 text-sm text-[#82513a]">Carrello vuoto. Aggiungi una pizza dal menu.</p>}
-                  {carrello.map((item) => (
-                    <article key={item.id} className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="font-semibold">
-                          {item.quantita}x {item.nome}
-                        </h3>
-                        <p className="font-semibold">
-                          {formatEuro((item.basePrezzo + getTotaleExtra(item.extra)) * item.quantita)}
-                        </p>
+                  {!carrello.length && (
+                    <p className="rounded-2xl bg-white p-4 text-center text-sm leading-relaxed text-[#82513a]">
+                      Il carrello è vuoto. Vai al menu per aggiungere le tue pizze.
+                    </p>
+                  )}
+                  {carrello.length > 0 && (
+                    <>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setShowSvuotaCarrelloModal(true)}
+                          className="rounded-xl border border-[#d59e7d] bg-white px-4 py-2.5 text-sm font-semibold text-[#8f3b18]"
+                        >
+                          Svuota carrello
+                        </button>
                       </div>
-                      <p className="mt-1 text-xs text-[#82513a]">
-                        Prezzo unitario: {formatEuro(item.basePrezzo + getTotaleExtra(item.extra))}
+                      {carrello.map((item) => {
+                        const unitario = item.basePrezzo + getTotaleExtra(item.extra);
+                        const totaleRiga = unitario * item.quantita;
+                        return (
+                          <article key={item.id} className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <h3 className="text-base font-semibold text-[#3a1f12]">{item.nome}</h3>
+                              <p className="font-semibold tabular-nums text-[#8f3b18]">{formatEuro(totaleRiga)}</p>
+                            </div>
+                            <div className="mt-4 flex flex-wrap items-center gap-3">
+                              <div className="flex items-center gap-2 rounded-xl border border-[#ecc8b1] bg-[#fffaf6] p-1">
+                                <button
+                                  type="button"
+                                  aria-label="Diminuisci quantità"
+                                  onClick={() => decrementQuantitaCarrello(item.id)}
+                                  className="flex min-h-11 min-w-11 items-center justify-center rounded-lg bg-white text-xl font-bold text-[#8f3b18] shadow-sm active:bg-[#f4dfd0]"
+                                >
+                                  −
+                                </button>
+                                <span className="min-w-[2.75rem] text-center text-xl font-bold tabular-nums text-[#3a1f12]">
+                                  {item.quantita}
+                                </span>
+                                <button
+                                  type="button"
+                                  aria-label="Aumenta quantità"
+                                  onClick={() => incrementQuantitaCarrello(item.id)}
+                                  className="flex min-h-11 min-w-11 items-center justify-center rounded-lg bg-white text-xl font-bold text-[#8f3b18] shadow-sm active:bg-[#f4dfd0]"
+                                >
+                                  +
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => rimuoviRigaCarrello(item.id)}
+                                className="min-h-11 rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-800 active:bg-red-100"
+                              >
+                                Rimuovi
+                              </button>
+                            </div>
+                            <p className="mt-3 text-xs text-[#82513a]">
+                              Prezzo unitario (base + extra): {formatEuro(unitario)}
+                            </p>
+                            {item.extra.length > 0 && (
+                              <p className="mt-1 text-xs text-[#82513a]">Extra: {item.extra.join(", ")}</p>
+                            )}
+                            {item.note ? <p className="mt-1 text-xs text-[#82513a]">Note: {item.note}</p> : null}
+                            {(item.ingredientiRimossi?.length ?? 0) > 0 && (
+                              <p className="mt-1 text-xs text-[#82513a]">
+                                Senza: {item.ingredientiRimossi?.join(", ")}
+                              </p>
+                            )}
+                          </article>
+                        );
+                      })}
+                  {clienteOrdineHuge && (
+                    <div className="rounded-2xl border-2 border-amber-600 bg-amber-50 p-4">
+                      <p className="text-sm font-semibold leading-relaxed text-amber-950">
+                        Per ordini superiori a 30 pizze contatta la pizzeria per concordare orario e disponibilità.
                       </p>
-                      <p className="mt-1 text-xs font-semibold text-[#6d4331]">
-                        Totale: {formatEuro((item.basePrezzo + getTotaleExtra(item.extra)) * item.quantita)}
-                      </p>
-                      {item.extra.length > 0 && <p className="mt-2 text-xs text-[#82513a]">Extra: {item.extra.join(", ")}</p>}
-                      {item.note && <p className="mt-1 text-xs text-[#82513a]">Note: {item.note}</p>}
-                    </article>
-                  ))}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setClientePreventivoNotice("Richiesta inviata in demo. Ti contatteremo a breve.")
+                        }
+                        className="mt-3 w-full rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white"
+                      >
+                        Richiedi preventivo/contatto
+                      </button>
+                      {clientePreventivoNotice ? (
+                        <p className="mt-2 text-xs font-semibold text-emerald-800">{clientePreventivoNotice}</p>
+                      ) : null}
+                    </div>
+                  )}
+                  {!clienteOrdineHuge &&
+                    tipoOrdine === "ritiro" &&
+                    pizzeNelCarrello >= ORDER_SIZE_THRESHOLDS.largeOrderMinPizzas &&
+                    pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas && (
+                      <div className="space-y-2">
+                        <span className="inline-block rounded-full bg-amber-200 px-3 py-1 text-xs font-bold text-amber-950">
+                          ORDINE GRANDE
+                        </span>
+                        <div className="rounded-2xl border border-amber-400 bg-amber-50 p-4 text-sm leading-relaxed text-amber-950">
+                          <p className="font-semibold">Questo ordine richiede conferma manuale della pizzeria.</p>
+                          <p className="mt-2">
+                            Per ordini superiori a 12 pizze, l&apos;orario scelto è una richiesta. La pizzeria confermerà
+                            l&apos;orario definitivo.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  {!clienteOrdineHuge &&
+                    tipoOrdine === "consegna" &&
+                    pizzeNelCarrello > slotCapacityConfig.maxPizzasPerDeliveryOrder &&
+                    pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas && (
+                      <div className="space-y-2">
+                        <span className="inline-block rounded-full bg-amber-200 px-3 py-1 text-xs font-bold text-amber-950">
+                          ORDINE GRANDE
+                        </span>
+                        <div className="rounded-2xl border border-sky-400 bg-sky-50 p-4 text-sm leading-relaxed text-sky-950">
+                          <p className="font-semibold">Questo ordine richiede conferma manuale della pizzeria.</p>
+                          <p className="mt-2">
+                            Ordine grande in consegna: la pizzeria confermerà disponibilità e orario.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   <div className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
                     <p className="text-sm font-semibold">Come vuoi ricevere l&apos;ordine?</p>
                     <div className="mt-3 grid grid-cols-2 gap-2">
@@ -2273,17 +2936,28 @@ export default function Home() {
                         >
                           <div className="flex items-center justify-between">
                             <p className="text-sm font-semibold">{slot.slot}</p>
-                            <p className="text-xs font-semibold">
-                              {slot.full
-                                ? slot.kitchenOverloaded || slot.pickupOverloaded || slot.deliveryOverloaded
-                                  ? "Non disponibile"
-                                  : "Pieno"
-                                : slot.nonDisponibilePerOrdine
-                                  ? "Non disponibile per questo ordine"
-                                  : slot.stato === "quasi pieno"
-                                    ? "Quasi pieno"
-                                    : "Disponibile"}
-                            </p>
+                            <div className="text-right">
+                              <p className="text-xs font-semibold">
+                                {slot.clienteSlotLabel
+                                  ? slot.clienteSlotLabel
+                                  : slot.full
+                                    ? slot.kitchenOverloaded || slot.pickupOverloaded || slot.deliveryOverloaded
+                                      ? "Non disponibile"
+                                      : "Pieno"
+                                    : slot.nonDisponibilePerOrdine
+                                      ? "Non disponibile per questo ordine"
+                                      : slot.stato === "quasi pieno"
+                                        ? "Quasi pieno"
+                                        : "Disponibile"}
+                              </p>
+                              {slot.clienteSlotLabel &&
+                              (slot.clienteSlotLabel.includes("conferma") ||
+                                slot.clienteSlotLabel.includes("Consegna grande")) ? (
+                                <p className="text-[10px] font-bold uppercase tracking-wide text-amber-800">
+                                  Richiede conferma
+                                </p>
+                              ) : null}
+                            </div>
                           </div>
                           <p className="mt-1 text-xs text-[#6d4331]">
                             {tipoOrdine === "ritiro"
@@ -2300,9 +2974,20 @@ export default function Home() {
                               </p>
                             </>
                           )}
-                          {tipoOrdine === "consegna" && (slot.full || slot.riderLimited || slot.exceedsDeliveryOrderPizzaLimit) && (
+                          {tipoOrdine === "consegna" &&
+                            (slot.full ||
+                              slot.riderLimited ||
+                              (slot.exceedsDeliveryOrderPizzaLimit &&
+                                !(
+                                  pizzeNelCarrello > slotCapacityConfig.maxPizzasPerDeliveryOrder &&
+                                  pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas
+                                ))) && (
                             <p className="mt-1 text-xs font-semibold text-amber-800">
-                              {slot.exceedsDeliveryOrderPizzaLimit
+                              {slot.exceedsDeliveryOrderPizzaLimit &&
+                              !(
+                                pizzeNelCarrello > slotCapacityConfig.maxPizzasPerDeliveryOrder &&
+                                pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas
+                              )
                                 ? "Ordine troppo grande per una singola consegna. Contatta la pizzeria."
                                 : slot.deliveryResidualOrders < 1 && !slot.kitchenFull
                                   ? "Consegne piene, ritiro ancora disponibile."
@@ -2367,6 +3052,17 @@ export default function Home() {
                       <p className="text-sm font-semibold">Totale finale</p>
                       <p className="text-2xl font-bold">{formatEuro(totaleFinale)}</p>
                     </div>
+                    {!clienteOrdineHuge &&
+                      ((tipoOrdine === "ritiro" &&
+                        pizzeNelCarrello >= ORDER_SIZE_THRESHOLDS.largeOrderMinPizzas &&
+                        pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas) ||
+                        (tipoOrdine === "consegna" &&
+                          pizzeNelCarrello > slotCapacityConfig.maxPizzasPerDeliveryOrder &&
+                          pizzeNelCarrello <= ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas)) && (
+                      <p className="mt-3 rounded-xl bg-amber-100 px-3 py-2 text-xs font-semibold text-amber-950">
+                        Stato: in attesa di conferma pizzeria
+                      </p>
+                    )}
                     <div className="mt-3 rounded-xl bg-white p-3 text-xs text-[#6d4331]">
                       <p>Tipo ordine: {tipoOrdine === "ritiro" ? "Ritiro in pizzeria" : "Consegna a domicilio"}</p>
                       {tipoOrdine === "consegna" && (
@@ -2435,23 +3131,148 @@ export default function Home() {
                       {preferredOrderDemoNotice}
                     </p>
                   )}
+                    </>
+                  )}
                 </div>
               )}
 
               {tabCliente === "storico" && (
                 <div className="space-y-3">
+                  <div className="rounded-2xl border border-[#ecd7c8] bg-[#fffaf6] px-3 py-2 text-xs text-[#6d4331]">
+                    <span className="font-semibold text-[#3a1f12]">Centro notifiche:</span>{" "}
+                    {notificheClienteNonLette > 0
+                      ? `${notificheClienteNonLette} aggiornamenti non letti.`
+                      : "Sei in pari con gli avvisi della pizzeria."}{" "}
+                    <button
+                      type="button"
+                      className="font-semibold text-[#8f3b18] underline-offset-2 hover:underline"
+                      onClick={() => apriTabCliente("notifiche")}
+                    >
+                      Apri elenco
+                    </button>
+                  </div>
                   {ordiniPerStoricoCliente.map((ordine) => (
                     <article key={ordine.id} className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
-                      <div className="flex items-center justify-between">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <h3 className="font-semibold">{ordine.id}</h3>
-                        <span className="rounded-full bg-[#f4dfd0] px-3 py-1 text-xs font-semibold">{ordine.stato}</span>
+                        <div className="flex flex-wrap justify-end gap-1">
+                          <span className="rounded-full bg-[#f4dfd0] px-3 py-1 text-xs font-semibold">{ordine.stato}</span>
+                          {ordine.isLargeOrder && ordine.largeOrderConfirmed ? (
+                            <span className="rounded-full bg-violet-200 px-2 py-1 text-[10px] font-bold text-violet-950">
+                              ORDINE GRANDE CONFERMATO
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                       <div className="mt-2 space-y-1 text-sm text-[#82513a]">
                         <p>Ordine del {formatItalianDate(ordine.orderDate)}</p>
                         <p>Inserito alle {formatItalianTime(ordine.createdAt)}</p>
                         <p>Tipo ordine: {ordine.tipoOrdine === "ritiro" ? "Ritiro in pizzeria" : "Consegna a domicilio"}</p>
-                        <p>Orario: {ordine.orarioScelto}</p>
+                        <p>
+                          Orario: {ordine.orarioScelto}
+                          {ordine.awaitingCustomerTimeConfirmation && ordine.proposedTime ? (
+                            <span className="block text-xs font-semibold text-amber-800">
+                              Proposta pizzeria: {ordine.proposedTime} (in attesa della tua scelta)
+                            </span>
+                          ) : null}
+                        </p>
                         <p>Stato: {ordine.stato}</p>
+                        {ordine.awaitingCustomerTimeConfirmation && ordine.proposedTime ? (
+                          <div className="mt-3 rounded-xl border border-amber-400 bg-amber-50 p-3 text-sm text-amber-950">
+                            <p className="font-semibold">La pizzeria propone il nuovo orario: {ordine.proposedTime}</p>
+                            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                              <button
+                                type="button"
+                                onClick={() => clienteAccettaNuovoOrario(ordine.id)}
+                                className="rounded-xl bg-[#8f3b18] py-3 text-xs font-semibold text-white"
+                              >
+                                Accetta nuovo orario
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => clienteRifiutaNuovoOrario(ordine.id)}
+                                className="rounded-xl border border-amber-700 bg-white py-3 text-xs font-semibold text-amber-950"
+                              >
+                                Rifiuta e contatta la pizzeria
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                        {(ordine.eventiTimeline?.length ?? 0) > 0 ? (
+                          <div className="mt-3 border-l-2 border-[#ecc8b1] pl-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-[#9a715c]">
+                              Cronologia ordine
+                            </p>
+                            <ul className="mt-2 space-y-2">
+                              {[...(ordine.eventiTimeline ?? [])]
+                                .reverse()
+                                .map((ev, idx) => (
+                                  <li key={`${ordine.id}-tl-${idx}-${ev.at}`} className="text-xs text-[#6d4331]">
+                                    <span className="font-semibold text-[#82513a]">
+                                      {formatItalianDate(ev.at.slice(0, 10))} {formatItalianTime(ev.at)}
+                                    </span>
+                                    <p className="mt-0.5 leading-snug">{ev.messaggio}</p>
+                                  </li>
+                                ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        <div className="mt-3 rounded-xl bg-[#fff7f0] p-3 text-xs text-[#6d4331]">
+                          <p className="font-semibold uppercase tracking-wide text-[#9a715c]">Timeline stato</p>
+                          <ol className="mt-2 space-y-1.5">
+                            <li className={ordine.stato !== "ricevuto" || ordine.largeOrderConfirmed ? "font-semibold text-[#3a1f12]" : ""}>
+                              1. Ordine ricevuto
+                            </li>
+                            <li
+                              className={
+                                ordine.stato !== "ricevuto" || ordine.largeOrderConfirmed ? "font-semibold text-[#3a1f12]" : "opacity-60"
+                              }
+                            >
+                              2. Confermato dalla pizzeria
+                              {ordine.largeOrderConfirmed ? " ✓" : ""}
+                            </li>
+                            <li
+                              className={
+                                (ordine.eventiTimeline ?? []).some((e) =>
+                                  e.messaggio.toLowerCase().includes("orario")
+                                ) || ordine.awaitingCustomerTimeConfirmation
+                                  ? "font-semibold text-[#3a1f12]"
+                                  : "opacity-60"
+                              }
+                            >
+                              3. Orario modificato / proposto
+                            </li>
+                            <li
+                              className={
+                                ["in preparazione", "pronto per il ritiro", "in consegna", "ritirato", "consegnato"].includes(
+                                  ordine.stato
+                                )
+                                  ? "font-semibold text-[#3a1f12]"
+                                  : "opacity-60"
+                              }
+                            >
+                              4. In preparazione
+                            </li>
+                            <li
+                              className={
+                                ["pronto per il ritiro", "in consegna", "ritirato", "consegnato"].includes(ordine.stato)
+                                  ? "font-semibold text-[#3a1f12]"
+                                  : "opacity-60"
+                              }
+                            >
+                              5. Pronto / In consegna
+                            </li>
+                            <li
+                              className={
+                                ordine.stato === "ritirato" || ordine.stato === "consegnato"
+                                  ? "font-semibold text-[#3a1f12]"
+                                  : "opacity-60"
+                              }
+                            >
+                              6. Completato
+                            </li>
+                          </ol>
+                        </div>
                         <div className="mt-2 rounded-xl bg-[#fff7f0] p-2 text-xs text-[#6d4331]">
                           <p className="font-semibold">Pagamento</p>
                           <p>Metodo: {getPaymentMethodLabel(ordine.paymentMethod)}</p>
@@ -2530,6 +3351,23 @@ export default function Home() {
 
               {tabCliente === "profilo" && (
                 <div className="space-y-4">
+                  <section className="rounded-2xl border border-[#ecd7c8] bg-[#fffaf6] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-[#3a1f12]">Centro notifiche</p>
+                      {notificheClienteNonLette > 0 ? (
+                        <span className="rounded-full bg-[#8f3b18] px-2 py-0.5 text-[11px] font-bold text-white">
+                          {notificheClienteNonLette}
+                        </span>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => apriTabCliente("notifiche")}
+                      className="mt-2 w-full rounded-xl border border-[#d59e7d] bg-white py-2 text-xs font-semibold text-[#8f3b18]"
+                    >
+                      Apri notifiche
+                    </button>
+                  </section>
                   <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
                     <h3 className="font-semibold">Profilo</h3>
                     <div className="mt-2 space-y-1 text-sm text-[#6d4331]">
@@ -2715,6 +3553,76 @@ export default function Home() {
                 </div>
               </div>
 
+              {adminClienteWhatsappPanelOpen && adminClienteWhatsappUltimo ? (
+                <div className="rounded-2xl border border-[#25D366]/35 bg-[#e8f8ec] p-3 text-sm text-[#1a4d2a] shadow-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-[#128C4A]">
+                        Messaggio cliente pronto (WhatsApp demo)
+                      </p>
+                      <p className="mt-1 text-[10px] leading-snug text-[#2d6b45]">
+                        Copia opzionale per uso esterno: non invia nulla dall&apos;app; la comunicazione in-app è nel Centro
+                        notifiche del cliente.
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={chiudiPanelMessaggioClienteAdmin}
+                        className="rounded-lg px-2 py-1 text-[11px] font-semibold text-[#128C4A] hover:bg-white/70"
+                      >
+                        Chiudi
+                      </button>
+                      <button
+                        type="button"
+                        onClick={chiudiPanelMessaggioClienteAdmin}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-lg leading-none text-[#1a4d2a] hover:bg-white/70"
+                        aria-label="Chiudi messaggio WhatsApp"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    readOnly
+                    value={adminClienteWhatsappUltimo.text}
+                    className="mt-2 h-20 w-full rounded-xl border border-[#b8e6c8] bg-white p-2 text-xs text-[#3a1f12]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => copiaAdminMessaggioCliente(adminClienteWhatsappUltimo.text)}
+                    className="mt-2 w-full rounded-xl bg-[#25D366] py-2.5 text-xs font-semibold text-white"
+                  >
+                    Copia messaggio WhatsApp
+                  </button>
+                  {adminMessaggioClienteCopied ? (
+                    <p className="mt-2 text-xs font-medium text-[#2d6b45]">{adminMessaggioClienteCopied}</p>
+                  ) : null}
+                </div>
+              ) : null}
+              {!adminClienteWhatsappPanelOpen && adminClienteWhatsappUltimo ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#ecd7c8] bg-[#fffaf6] px-3 py-2 text-[11px] text-[#6d4331]">
+                  <span>
+                    Ultimo messaggio WhatsApp generato ·{" "}
+                    <span className="font-semibold text-[#3a1f12]">{adminClienteWhatsappUltimo.ordineId}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (adminClienteWhatsappCopyCloseTimerRef.current) {
+                        window.clearTimeout(adminClienteWhatsappCopyCloseTimerRef.current);
+                        adminClienteWhatsappCopyCloseTimerRef.current = null;
+                      }
+                      setAdminClienteWhatsappPanelOpen(true);
+                      setAdminMessaggioClienteCopied("");
+                    }}
+                    className="shrink-0 rounded-lg border border-[#d59e7d] bg-white px-2 py-1 text-[11px] font-semibold text-[#8f3b18]"
+                  >
+                    Mostra
+                  </button>
+                </div>
+              ) : null}
+
               {adminTab === "ordini" && (
                 <section className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -2746,6 +3654,11 @@ export default function Home() {
                           <p className="text-xs font-semibold">{formatEuro(ordine.totaleFinale)}</p>
                         </div>
                         <p className="mt-1 text-xs text-[#6d4331]">
+                          Totale pizze: <span className="font-semibold">{contaPizzeOrdine(ordine.righe)}</span>
+                          {" · "}
+                          Righe prodotti: <span className="font-semibold">{ordine.righe.length}</span>
+                        </p>
+                        <p className="mt-1 text-xs text-[#6d4331]">
                           {ordine.orarioScelto} - {ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"} - Stato: {ordine.stato}
                         </p>
                         <div className="mt-2 flex flex-wrap gap-1">
@@ -2755,13 +3668,96 @@ export default function Home() {
                           <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.source === "telefono" ? "bg-orange-100 text-orange-800" : "bg-emerald-100 text-emerald-800"}`}>
                             {ordine.source === "telefono" ? "TELEFONICO" : "APP"}
                           </span>
+                          {ordine.isLargeOrder ? (
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                ordine.largeOrderConfirmed
+                                  ? "bg-violet-300 text-violet-950"
+                                  : "bg-violet-200 text-violet-900"
+                              }`}
+                            >
+                              {ordine.largeOrderConfirmed ? "ORDINE GRANDE CONFERMATO" : "ORDINE GRANDE"}
+                            </span>
+                          ) : null}
+                          {ordine.requiresManualConfirmation && !ordine.largeOrderConfirmed ? (
+                            <span className="rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-bold text-red-900">
+                              DA CONFERMARE
+                            </span>
+                          ) : null}
+                          {ordine.adminOrdineBadgeExtra === "nuovo_orario_accettato" ? (
+                            <span className="rounded-full bg-emerald-200 px-2 py-0.5 text-[10px] font-bold text-emerald-950">
+                              NUOVO ORARIO ACCETTATO
+                            </span>
+                          ) : null}
+                          {ordine.adminOrdineBadgeExtra === "cliente_da_ricontattare" ? (
+                            <span className="rounded-full bg-orange-200 px-2 py-0.5 text-[10px] font-bold text-orange-950">
+                              CLIENTE DA RICONTATTARE
+                            </span>
+                          ) : null}
                         </div>
+                        <AdminDettaglioOrdineBlock
+                          ordine={ordine}
+                          expanded={Boolean(adminOrdineDettaglioEspanso[ordine.id])}
+                          onToggleExpand={() => toggleAdminDettaglioOrdine(ordine.id)}
+                        />
+                        <div className="mt-2 rounded-xl border border-[#e8cdb7] bg-[#fffaf6] p-2 text-[11px] leading-snug text-[#6d4331]">
+                          <p className="font-semibold uppercase tracking-wide text-[#9a715c]">
+                            Comunicazioni cliente
+                          </p>
+                          <p className="mt-1">
+                            <span className="font-semibold">Ultima notifica in app:</span>{" "}
+                            {(() => {
+                              const ultimaApp = notificheCliente
+                                .filter((n) => n.ordineId === ordine.id)
+                                .sort(
+                                  (a, b) =>
+                                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                                )[0];
+                              return ultimaApp?.testo ?? "—";
+                            })()}
+                          </p>
+                          <p className="mt-1">
+                            <span className="font-semibold">Stato (demo):</span>{" "}
+                            {ordine.adminOrdineBadgeExtra === "nuovo_orario_accettato"
+                              ? "accettata"
+                              : ordine.adminOrdineBadgeExtra === "cliente_da_ricontattare"
+                                ? "da ricontattare"
+                                : ordine.awaitingCustomerTimeConfirmation
+                                  ? "in attesa risposta cliente"
+                                  : "letta / inviata"}
+                          </p>
+                          <p className="mt-2 text-[10px] text-[#9a715c]">
+                            Il messaggio WhatsApp copiabile nell&apos;area verde sopra è solo comunicazione esterna
+                            opzionale, non inviata dall&apos;app.
+                          </p>
+                        </div>
+                        {ordine.requiresManualConfirmation && !ordine.largeOrderConfirmed ? (
+                          <div className="mt-2 grid grid-cols-1 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => confermaOrdineGrandeAdmin(ordine.id)}
+                              className="rounded-lg bg-red-700 px-3 py-2 text-xs font-semibold text-white shadow-sm"
+                            >
+                              Conferma ordine grande
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => apriModificaOrarioAdmin(ordine.id)}
+                              className="rounded-lg border border-[#d59e7d] bg-white px-3 py-2 text-xs font-semibold text-[#8f3b18]"
+                            >
+                              Modifica orario proposto
+                            </button>
+                          </div>
+                        ) : null}
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           <button onClick={() => avanzaStatoOrdine(ordine.id)} disabled={ordine.stato === (ordine.tipoOrdine === "ritiro" ? "ritirato" : "consegnato")} className="rounded-lg bg-[#8f3b18] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Avanza stato</button>
                           <button onClick={() => apriAnteprimaComanda([ordine])} className="rounded-lg border border-[#8f3b18] bg-white px-3 py-2 text-xs font-semibold text-[#8f3b18]">Stampa comanda</button>
                         </div>
                       </article>
                     ))}
+                    {adminOrdineAzioniNotice ? (
+                      <p className="rounded-xl bg-[#f4dfd0] p-3 text-xs font-semibold text-[#6d4331]">{adminOrdineAzioniNotice}</p>
+                    ) : null}
                     {ordiniFiltratiStampa.length === 0 && (
                       <p className="rounded-xl bg-[#fff7f0] p-3 text-xs text-[#82513a]">Nessun ordine per i filtri selezionati.</p>
                     )}
@@ -2812,12 +3808,81 @@ export default function Home() {
                                     <p className="text-xs font-semibold">{formatEuro(ordine.totaleFinale)}</p>
                                   </div>
                                   <p className="mt-1 text-xs text-[#82513a]">Cliente: {ordine.clienteNome}</p>
+                                  <p className="mt-1 text-[11px] text-[#6d4331]">
+                                    Totale pizze: <span className="font-semibold">{contaPizzeOrdine(ordine.righe)}</span>
+                                    {" · "}
+                                    Righe: <span className="font-semibold">{ordine.righe.length}</span>
+                                  </p>
                                   <div className="mt-2 flex flex-wrap gap-1">
                                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.tipoOrdine === "ritiro" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>{ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}</span>
                                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.source === "telefono" ? "bg-orange-100 text-orange-800" : "bg-emerald-100 text-emerald-800"}`}>{ordine.source === "telefono" ? "TELEFONICO" : "APP"}</span>
                                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.printed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>{ordine.printed ? "COMANDA STAMPATA" : "DA STAMPARE"}</span>
                                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.paymentStatus === "pagato" ? "bg-emerald-100 text-emerald-800" : "bg-orange-100 text-orange-800"}`}>{ordine.paymentStatus === "pagato" ? "PAGATO" : "DA INCASSARE"}</span>
+                                    {ordine.isLargeOrder ? (
+                                      <span
+                                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                          ordine.largeOrderConfirmed
+                                            ? "bg-violet-300 text-violet-950"
+                                            : "bg-violet-200 text-violet-900"
+                                        }`}
+                                      >
+                                        {ordine.largeOrderConfirmed ? "ORDINE GRANDE CONFERMATO" : "ORDINE GRANDE"}
+                                      </span>
+                                    ) : null}
+                                    {ordine.requiresManualConfirmation && !ordine.largeOrderConfirmed ? (
+                                      <span className="rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-bold text-red-900">
+                                        DA CONFERMARE
+                                      </span>
+                                    ) : null}
+                                    {ordine.adminOrdineBadgeExtra === "nuovo_orario_accettato" ? (
+                                      <span className="rounded-full bg-emerald-200 px-2 py-0.5 text-[10px] font-bold text-emerald-950">
+                                        NUOVO ORARIO OK
+                                      </span>
+                                    ) : null}
+                                    {ordine.adminOrdineBadgeExtra === "cliente_da_ricontattare" ? (
+                                      <span className="rounded-full bg-orange-200 px-2 py-0.5 text-[10px] font-bold text-orange-950">
+                                        RICONTATTA
+                                      </span>
+                                    ) : null}
                                   </div>
+                                  <AdminDettaglioOrdineBlock
+                                    ordine={ordine}
+                                    expanded={Boolean(adminOrdineDettaglioEspanso[`kb-${ordine.id}`])}
+                                    onToggleExpand={() =>
+                                      toggleAdminDettaglioOrdine(`kb-${ordine.id}`)
+                                    }
+                                  />
+                                  <p className="mt-1 text-[10px] leading-snug text-[#9a715c]">
+                                    Comunicazioni:{" "}
+                                    {(() => {
+                                      const u = notificheCliente
+                                        .filter((n) => n.ordineId === ordine.id)
+                                        .sort(
+                                          (a, b) =>
+                                            new Date(b.createdAt).getTime() -
+                                            new Date(a.createdAt).getTime()
+                                        )[0];
+                                      return u ? `${u.testo.slice(0, 72)}${u.testo.length > 72 ? "…" : ""}` : "—";
+                                    })()}
+                                  </p>
+                                  {ordine.requiresManualConfirmation && !ordine.largeOrderConfirmed ? (
+                                    <div className="mt-2 grid grid-cols-1 gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => confermaOrdineGrandeAdmin(ordine.id)}
+                                        className="rounded-lg bg-red-700 px-3 py-2 text-[11px] font-semibold text-white"
+                                      >
+                                        Conferma ordine grande
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => apriModificaOrarioAdmin(ordine.id)}
+                                        className="rounded-lg border border-[#d59e7d] bg-white px-3 py-2 text-[11px] font-semibold text-[#8f3b18]"
+                                      >
+                                        Modifica orario proposto
+                                      </button>
+                                    </div>
+                                  ) : null}
                                   <button onClick={() => avanzaStatoOrdine(ordine.id)} disabled={ordine.stato === (ordine.tipoOrdine === "ritiro" ? "ritirato" : "consegnato")} className="mt-2 w-full rounded-lg bg-[#8f3b18] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Avanza stato</button>
                                 </article>
                               ))}
@@ -2838,6 +3903,21 @@ export default function Home() {
                       <p>Apertura: {ORARI_PIZZERIA.openingTime}</p>
                       <p>Chiusura: {ORARI_PIZZERIA.closingTime}</p>
                       <p>Intervallo slot: {ORARI_PIZZERIA.slotIntervalMinutes} minuti</p>
+                    </div>
+                    <div className="mt-4 rounded-xl border border-[#ecc8b1] bg-[#fffaf6] p-3 text-xs leading-relaxed text-[#6d4331]">
+                      <p className="font-semibold uppercase tracking-wide text-[#9a715c]">Soglie ordini grandi (demo)</p>
+                      <p>
+                        Ordine normale: fino a <span className="font-semibold">{ORDER_SIZE_THRESHOLDS.normalOrderMaxPizzas}</span> pizze
+                      </p>
+                      <p>
+                        Ordine grande (richiesta conferma): da{" "}
+                        <span className="font-semibold">{ORDER_SIZE_THRESHOLDS.largeOrderMinPizzas}</span> a{" "}
+                        <span className="font-semibold">{ORDER_SIZE_THRESHOLDS.largeOrderMaxPizzas}</span> pizze
+                      </p>
+                      <p>
+                        Ordine enorme / contatto diretto: da{" "}
+                        <span className="font-semibold">{ORDER_SIZE_THRESHOLDS.hugeOrderMinPizzas}</span> pizze
+                      </p>
                     </div>
                     <div className="mt-4 space-y-2 rounded-xl bg-[#fff7f0] p-3 text-xs">
                       <p className="font-semibold uppercase tracking-wide text-[#9a715c]">Capacita ritiro e consegna</p>
@@ -2892,7 +3972,14 @@ export default function Home() {
 
               {adminTab === "ordine-telefonico" && (
                 <section className="space-y-3 rounded-2xl border border-[#f0d7c7] bg-white p-4">
-                  <h2 className="font-semibold">Inserimento ordine manuale</h2>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="font-semibold">Inserimento ordine manuale</h2>
+                    {manualPizzaCount >= ORDER_SIZE_THRESHOLDS.largeOrderMinPizzas ? (
+                      <span className="rounded-full bg-violet-200 px-3 py-1 text-xs font-bold text-violet-900">
+                        ORDINE GRANDE
+                      </span>
+                    ) : null}
+                  </div>
                   <div className="space-y-2 rounded-xl bg-[#fff7f0] p-3">
                     <p className="text-xs font-semibold uppercase tracking-wide text-[#9a715c]">Cliente</p>
                     <input value={manualCustomerName} onChange={(e) => setManualCustomerName(e.target.value)} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Nome cliente" />
@@ -2958,7 +4045,9 @@ export default function Home() {
                         Capacita rider limitata in questa fascia oraria.
                       </p>
                     )}
-                    {manualTipoOrdine === "consegna" && manualSelectedSlotInfo?.exceedsDeliveryOrderPizzaLimit && (
+                    {manualTipoOrdine === "consegna" &&
+                      manualSelectedSlotInfo?.exceedsDeliveryOrderPizzaLimit &&
+                      manualPizzaCount <= ORDER_SIZE_THRESHOLDS.normalOrderMaxPizzas && (
                       <p className="mt-2 rounded-lg bg-red-100 p-2 text-[11px] font-semibold text-red-900">
                         Ordine troppo grande per una singola consegna. Contatta la pizzeria.
                       </p>
@@ -3045,6 +4134,11 @@ export default function Home() {
                     </div>
                     <textarea value={manualPizzaNote} onChange={(e) => setManualPizzaNote(e.target.value)} className="h-20 w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Note pizza" />
                     <button onClick={aggiungiPizzaOrdineManuale} className="w-full rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white">Aggiungi pizza all&apos;ordine</button>
+                    {manualRows.length > 0 ? (
+                      <p className="rounded-lg bg-white p-2 text-xs font-semibold text-[#3a1f12]">
+                        Totale pizze: {manualPizzaCount} · Righe prodotti: {manualRows.length}
+                      </p>
+                    ) : null}
                     {manualRows.map((row) => (
                       <article key={row.id} className="rounded-xl border border-[#ecd7c8] bg-white p-3 text-sm">
                         <div className="flex items-center justify-between gap-2">
@@ -3394,13 +4488,34 @@ export default function Home() {
 
         {view === "cliente" && (
           <nav className="fixed bottom-3 left-1/2 z-10 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 rounded-2xl border border-[#e8cdb7] bg-white p-2 shadow-lg">
-            <div className="grid grid-cols-5 gap-1 text-xs font-semibold">
+            <div className="grid grid-cols-3 gap-1 text-[10px] font-semibold leading-tight sm:grid-cols-6 sm:text-[11px]">
               <button className={`rounded-xl py-2 ${tabCliente === "home" ? "bg-[#f4dfd0]" : ""}`} onClick={() => setTabCliente("home")}>Home</button>
               <button className={`rounded-xl py-2 ${tabCliente === "menu" ? "bg-[#f4dfd0]" : ""}`} onClick={() => setTabCliente("menu")}>Menu</button>
               <button className={`rounded-xl py-2 ${tabCliente === "carrello" ? "bg-[#f4dfd0]" : ""}`} onClick={() => setTabCliente("carrello")}>
                 Carrello{numeroProdottiCarrello > 0 ? ` (${numeroProdottiCarrello})` : ""}
               </button>
-              <button className={`rounded-xl py-2 ${tabCliente === "storico" ? "bg-[#f4dfd0]" : ""}`} onClick={() => setTabCliente("storico")}>Storico</button>
+              <button
+                className={`relative rounded-xl py-2 ${tabCliente === "storico" ? "bg-[#f4dfd0]" : ""}`}
+                onClick={() => apriTabCliente("storico")}
+              >
+                Storico
+                {notificheClienteNonLette > 0 ? (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#8f3b18] px-1 text-[9px] font-bold text-white">
+                    {notificheClienteNonLette > 9 ? "9+" : notificheClienteNonLette}
+                  </span>
+                ) : null}
+              </button>
+              <button
+                className={`relative rounded-xl py-2 ${tabCliente === "notifiche" ? "bg-[#f4dfd0]" : ""}`}
+                onClick={() => apriTabCliente("notifiche")}
+              >
+                Avvisi
+                {notificheClienteNonLette > 0 ? (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#8f3b18] px-1 text-[9px] font-bold text-white">
+                    {notificheClienteNonLette > 9 ? "9+" : notificheClienteNonLette}
+                  </span>
+                ) : null}
+              </button>
               <button className={`rounded-xl py-2 ${tabCliente === "profilo" ? "bg-[#f4dfd0]" : ""}`} onClick={() => setTabCliente("profilo")}>Profilo</button>
             </div>
           </nav>
@@ -3444,6 +4559,41 @@ export default function Home() {
             >
               Chiudi
             </button>
+          </div>
+        </div>
+      )}
+
+      {showSvuotaCarrelloModal && (
+        <div
+          className="fixed inset-0 z-20 flex items-center justify-center bg-black/35 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="svuota-carrello-title"
+          onClick={chiudiModalSvuotaCarrello}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl border border-[#ecc8b1] bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="svuota-carrello-title" className="text-lg font-bold text-[#3a1f12]">
+              Vuoi davvero svuotare il carrello?
+            </h3>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row-reverse">
+              <button
+                type="button"
+                onClick={confermaSvuotaCarrello}
+                className="w-full rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white sm:flex-1"
+              >
+                Svuota carrello
+              </button>
+              <button
+                type="button"
+                onClick={chiudiModalSvuotaCarrello}
+                className="w-full rounded-xl border border-[#d59e7d] bg-white py-3 text-sm font-semibold text-[#8f3b18] sm:flex-1"
+              >
+                Annulla
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -3569,6 +4719,56 @@ export default function Home() {
         </div>
       )}
 
+      {adminModificaOrarioOrdineId ? (
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-3 sm:items-center">
+          <div
+            className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-4 shadow-xl sm:rounded-3xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-orario-titolo"
+          >
+            <h3 id="modal-orario-titolo" className="text-lg font-bold text-[#3a1f12]">
+              Modifica orario proposto
+            </h3>
+            <p className="mt-1 text-xs text-[#6d4331]">
+              Ordine <span className="font-semibold">{adminModificaOrarioOrdineId}</span> — scegli un nuovo slot
+            </p>
+            <div className="mt-4 grid max-h-52 gap-2 overflow-y-auto sm:max-h-64">
+              {generaSlotOrari().map((slot) => (
+                <button
+                  key={`modal-slot-${slot}`}
+                  type="button"
+                  onClick={() => setAdminModificaOrarioDraft(slot)}
+                  className={`rounded-xl border p-3 text-left text-sm font-semibold transition ${
+                    adminModificaOrarioDraft === slot
+                      ? "border-[#8f3b18] bg-[#f4dfd0] text-[#8f3b18]"
+                      : "border-[#ecc8b1] bg-[#fffaf6] text-[#3a1f12]"
+                  }`}
+                >
+                  {slot}
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={chiudiModificaOrarioAdmin}
+                className="rounded-xl border border-[#d59e7d] bg-white py-3 text-sm font-semibold text-[#8f3b18]"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                onClick={salvaModificaOrarioAdmin}
+                className="rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white"
+              >
+                Salva nuovo orario
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {showPrintPreview && (
         <div className="fixed inset-0 z-30 bg-black/40 p-3">
           <div className="mx-auto mt-10 max-w-md rounded-3xl bg-white p-4">
@@ -3579,6 +4779,11 @@ export default function Home() {
                 <div key={`preview-${ordine.id}`} className="rounded-xl bg-[#fff7f0] p-3 text-xs text-[#6d4331]">
                   <p className="font-semibold text-[#3a1f12]">{ordine.id}</p>
                   <p>{ordine.clienteNome} - {ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}</p>
+                  <p>
+                    Totale pizze: <span className="font-semibold">{contaPizzeOrdine(ordine.righe)}</span>
+                    {" · "}
+                    Righe: <span className="font-semibold">{ordine.righe.length}</span>
+                  </p>
                   <p>Orario: {ordine.orarioScelto}</p>
                   <p>Prodotti: {ordine.righe.map((r) => `${r.quantita}x ${r.nome}`).join(", ")}</p>
                 </div>
@@ -3637,6 +4842,8 @@ function ComandaPrintView({ ordine }: { ordine: Ordine }) {
       <p>Stato ordine: {ordine.stato}</p>
       <p>Cliente: {ordine.clienteNome}</p>
       <p>Telefono: {ordine.telefonoCliente || "-"}</p>
+      <p>Totale pizze: {contaPizzeOrdine(ordine.righe)}</p>
+      <p>Righe prodotti: {ordine.righe.length}</p>
       {ordine.tipoOrdine === "consegna" && (
         <>
           <p>Indirizzo: {ordine.indirizzo || "-"}</p>
