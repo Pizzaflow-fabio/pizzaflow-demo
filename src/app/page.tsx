@@ -29,7 +29,8 @@ type AdminTab =
   | "crm"
   | "rfm"
   | "prodotti"
-  | "marketing";
+  | "marketing"
+  | "archivio";
 type StatoOrdine =
   | "ricevuto"
   | "accettato"
@@ -134,6 +135,9 @@ type Ordine = {
   source: OrderSource;
   printed: boolean;
   printedAt?: string;
+  archived: boolean;
+  archivedAt?: string;
+  serviceDate: string;
 };
 
 type Cliente = {
@@ -229,143 +233,243 @@ const CLIENTI_DEMO: Cliente[] = [
   { id: "c4", nome: "Davide F.", telefono: "333 1002004", email: "davide@email.demo", ordiniTotali: 1, ultimoOrdineGiorniFa: 3, preferenzaWeekend: false, hasApp: true, source: "app" },
 ];
 
-const ORDINI_INIZIALI: Ordine[] = [
-  {
-    id: "PF-2041",
-    clienteId: "c1",
-    clienteNome: "Giulia B.",
-    orderDate: "2026-05-03",
-    createdAt: "2026-05-03T18:12:00",
-    dataISO: new Date().toISOString(),
-    tipoOrdine: "ritiro",
-    orarioScelto: "19:30",
-    stato: "pronto per il ritiro",
-    righe: [{ id: "r1", pizzaId: "bufalina", nome: "Bufalina", basePrezzo: 11, extra: ["Burrata"], note: "Tagliare in 6 fette", quantita: 1 }],
-    costoConsegna: 0,
-    totaleFinale: 12.5,
-    paymentMethod: "card_at_pickup",
-    paymentStatus: "da pagare",
-    needsPos: true,
-    telefonoCliente: "333 1002001",
-    source: "app",
-    printed: false,
-  },
-  {
-    id: "PF-2042",
-    clienteId: "c3",
-    clienteNome: "Marta R.",
-    orderDate: "2026-05-03",
-    createdAt: "2026-05-03T18:26:00",
-    dataISO: new Date().toISOString(),
-    tipoOrdine: "consegna",
-    orarioScelto: "20:00",
-    stato: "in consegna",
-    righe: [{ id: "r2", pizzaId: "diavola", nome: "Diavola", basePrezzo: 9.5, extra: [], note: "", quantita: 2 }],
-    costoConsegna: 2.5,
-    totaleFinale: 21.5,
-    paymentMethod: "cash_on_delivery",
-    paymentStatus: "da pagare",
-    needsPos: false,
-    origineIndirizzo: "salvato",
-    etichettaIndirizzo: "Casa",
-    indirizzo: "Via Roma 24, Milano",
-    citofonoInterno: "Rossi, Int. 3B",
-    telefonoCliente: "333 1002003",
-    noteRider: "Suonare una volta sola",
-    source: "app",
-    printed: false,
-  },
-  {
-    id: "PF-2043",
-    clienteId: "c2",
-    clienteNome: "Luca P.",
-    orderDate: "2026-05-03",
-    createdAt: "2026-05-03T18:35:00",
-    dataISO: new Date().toISOString(),
-    tipoOrdine: "ritiro",
-    orarioScelto: "19:00",
-    stato: "accettato",
-    righe: [{ id: "r3", pizzaId: "margherita", nome: "Margherita", basePrezzo: 7.5, extra: [], note: "", quantita: 3 }],
-    costoConsegna: 0,
-    totaleFinale: 22.5,
-    paymentMethod: "cash_at_pickup",
-    paymentStatus: "da pagare",
-    needsPos: false,
-    telefonoCliente: "333 1002002",
-    source: "app",
-    printed: false,
-  },
-  {
-    id: "PF-2044",
-    clienteId: "c4",
-    clienteNome: "Davide F.",
-    orderDate: "2026-05-03",
-    createdAt: "2026-05-03T18:40:00",
-    dataISO: new Date().toISOString(),
-    tipoOrdine: "consegna",
-    orarioScelto: "20:00",
-    stato: "in preparazione",
-    righe: [{ id: "r4", pizzaId: "margherita", nome: "Margherita", basePrezzo: 7.5, extra: [], note: "Ordine team", quantita: 18 }],
-    costoConsegna: 0,
-    totaleFinale: 135,
-    paymentMethod: "card_on_delivery",
-    paymentStatus: "da pagare",
-    needsPos: true,
-    origineIndirizzo: "salvato",
-    etichettaIndirizzo: "Ufficio",
-    indirizzo: "Viale Monza 118, Milano",
-    citofonoInterno: "Reception 1",
-    telefonoCliente: "333 1002004",
-    noteRider: "Consegna reception piano terra",
-    source: "app",
-    printed: false,
-  },
-  {
-    id: "PF-2045",
-    clienteId: "c1",
-    clienteNome: "Giulia B.",
-    orderDate: "2026-05-03",
-    createdAt: "2026-05-03T18:50:00",
-    dataISO: new Date().toISOString(),
-    tipoOrdine: "ritiro",
-    orarioScelto: "20:15",
-    stato: "ricevuto",
-    righe: [{ id: "r5", pizzaId: "diavola", nome: "Diavola", basePrezzo: 9.5, extra: [], note: "", quantita: 15 }],
-    costoConsegna: 0,
-    totaleFinale: 142.5,
-    paymentMethod: "cash_at_pickup",
-    paymentStatus: "da pagare",
-    needsPos: false,
-    telefonoCliente: "333 1002001",
-    source: "app",
-    printed: false,
-  },
-  {
-    id: "PF-2046",
-    clienteId: "c3",
-    clienteNome: "Marta R.",
-    orderDate: "2026-05-03",
-    createdAt: "2026-05-03T18:55:00",
-    dataISO: new Date().toISOString(),
-    tipoOrdine: "consegna",
-    orarioScelto: "20:15",
-    stato: "accettato",
-    righe: [{ id: "r6", pizzaId: "ortolana", nome: "Ortolana", basePrezzo: 9, extra: [], note: "", quantita: 10 }],
-    costoConsegna: 2.5,
-    totaleFinale: 92.5,
-    paymentMethod: "cash_on_delivery",
-    paymentStatus: "da pagare",
-    needsPos: false,
-    origineIndirizzo: "salvato",
-    etichettaIndirizzo: "Casa",
-    indirizzo: "Via Roma 24, Milano",
-    citofonoInterno: "Rossi, Int. 3B",
-    telefonoCliente: "333 1002003",
-    noteRider: "",
-    source: "app",
-    printed: false,
-  },
-];
+function buildOrdiniDemoIniziali(): Ordine[] {
+  const oggi = getTodayOrderDate();
+  const [y, mo, d] = oggi.split("-").map(Number);
+  const ieriDate = new Date(y, mo - 1, d - 1);
+  const ieri = `${ieriDate.getFullYear()}-${String(ieriDate.getMonth() + 1).padStart(2, "0")}-${String(ieriDate.getDate()).padStart(2, "0")}`;
+
+  const operativi: Ordine[] = [
+    {
+      id: "PF-2041",
+      clienteId: "c1",
+      clienteNome: "Giulia B.",
+      orderDate: oggi,
+      createdAt: `${oggi}T18:12:00`,
+      dataISO: `${oggi}T16:12:00.000Z`,
+      tipoOrdine: "ritiro",
+      orarioScelto: "19:30",
+      stato: "pronto per il ritiro",
+      righe: [{ id: "r1", pizzaId: "bufalina", nome: "Bufalina", basePrezzo: 11, extra: ["Burrata"], note: "Tagliare in 6 fette", quantita: 1 }],
+      costoConsegna: 0,
+      totaleFinale: 12.5,
+      paymentMethod: "card_at_pickup",
+      paymentStatus: "da pagare",
+      needsPos: true,
+      telefonoCliente: "333 1002001",
+      source: "app",
+      printed: false,
+      archived: false,
+      serviceDate: oggi,
+    },
+    {
+      id: "PF-2042",
+      clienteId: "c3",
+      clienteNome: "Marta R.",
+      orderDate: oggi,
+      createdAt: `${oggi}T18:26:00`,
+      dataISO: `${oggi}T16:26:00.000Z`,
+      tipoOrdine: "consegna",
+      orarioScelto: "20:00",
+      stato: "in consegna",
+      righe: [{ id: "r2", pizzaId: "diavola", nome: "Diavola", basePrezzo: 9.5, extra: [], note: "", quantita: 2 }],
+      costoConsegna: 2.5,
+      totaleFinale: 21.5,
+      paymentMethod: "cash_on_delivery",
+      paymentStatus: "da pagare",
+      needsPos: false,
+      origineIndirizzo: "salvato",
+      etichettaIndirizzo: "Casa",
+      indirizzo: "Via Roma 24, Milano",
+      citofonoInterno: "Rossi, Int. 3B",
+      telefonoCliente: "333 1002003",
+      noteRider: "Suonare una volta sola",
+      source: "app",
+      printed: false,
+      archived: false,
+      serviceDate: oggi,
+    },
+    {
+      id: "PF-2043",
+      clienteId: "c2",
+      clienteNome: "Luca P.",
+      orderDate: oggi,
+      createdAt: `${oggi}T18:35:00`,
+      dataISO: `${oggi}T16:35:00.000Z`,
+      tipoOrdine: "ritiro",
+      orarioScelto: "19:00",
+      stato: "accettato",
+      righe: [{ id: "r3", pizzaId: "margherita", nome: "Margherita", basePrezzo: 7.5, extra: [], note: "", quantita: 3 }],
+      costoConsegna: 0,
+      totaleFinale: 22.5,
+      paymentMethod: "cash_at_pickup",
+      paymentStatus: "da pagare",
+      needsPos: false,
+      telefonoCliente: "333 1002002",
+      source: "app",
+      printed: false,
+      archived: false,
+      serviceDate: oggi,
+    },
+    {
+      id: "PF-2044",
+      clienteId: "c4",
+      clienteNome: "Davide F.",
+      orderDate: oggi,
+      createdAt: `${oggi}T18:40:00`,
+      dataISO: `${oggi}T16:40:00.000Z`,
+      tipoOrdine: "consegna",
+      orarioScelto: "20:00",
+      stato: "in preparazione",
+      righe: [{ id: "r4", pizzaId: "margherita", nome: "Margherita", basePrezzo: 7.5, extra: [], note: "Ordine team", quantita: 18 }],
+      costoConsegna: 0,
+      totaleFinale: 135,
+      paymentMethod: "card_on_delivery",
+      paymentStatus: "da pagare",
+      needsPos: true,
+      origineIndirizzo: "salvato",
+      etichettaIndirizzo: "Ufficio",
+      indirizzo: "Viale Monza 118, Milano",
+      citofonoInterno: "Reception 1",
+      telefonoCliente: "333 1002004",
+      noteRider: "Consegna reception piano terra",
+      source: "app",
+      printed: false,
+      archived: false,
+      serviceDate: oggi,
+    },
+    {
+      id: "PF-2045",
+      clienteId: "c1",
+      clienteNome: "Giulia B.",
+      orderDate: oggi,
+      createdAt: `${oggi}T18:50:00`,
+      dataISO: `${oggi}T16:50:00.000Z`,
+      tipoOrdine: "ritiro",
+      orarioScelto: "20:15",
+      stato: "ricevuto",
+      righe: [{ id: "r5", pizzaId: "diavola", nome: "Diavola", basePrezzo: 9.5, extra: [], note: "", quantita: 15 }],
+      costoConsegna: 0,
+      totaleFinale: 142.5,
+      paymentMethod: "cash_at_pickup",
+      paymentStatus: "da pagare",
+      needsPos: false,
+      telefonoCliente: "333 1002001",
+      source: "app",
+      printed: false,
+      archived: false,
+      serviceDate: oggi,
+    },
+    {
+      id: "PF-2046",
+      clienteId: "c3",
+      clienteNome: "Marta R.",
+      orderDate: oggi,
+      createdAt: `${oggi}T18:55:00`,
+      dataISO: `${oggi}T16:55:00.000Z`,
+      tipoOrdine: "consegna",
+      orarioScelto: "20:15",
+      stato: "accettato",
+      righe: [{ id: "r6", pizzaId: "ortolana", nome: "Ortolana", basePrezzo: 9, extra: [], note: "", quantita: 10 }],
+      costoConsegna: 2.5,
+      totaleFinale: 92.5,
+      paymentMethod: "cash_on_delivery",
+      paymentStatus: "da pagare",
+      needsPos: false,
+      origineIndirizzo: "salvato",
+      etichettaIndirizzo: "Casa",
+      indirizzo: "Via Roma 24, Milano",
+      citofonoInterno: "Rossi, Int. 3B",
+      telefonoCliente: "333 1002003",
+      noteRider: "",
+      source: "app",
+      printed: false,
+      archived: false,
+      serviceDate: oggi,
+    },
+  ];
+
+  const archiviatiDemo: Ordine[] = [
+    {
+      id: "PF-1988",
+      clienteId: "c2",
+      clienteNome: "Luca P.",
+      orderDate: ieri,
+      createdAt: `${ieri}T19:05:00`,
+      dataISO: `${ieri}T17:05:00.000Z`,
+      tipoOrdine: "ritiro",
+      orarioScelto: "19:30",
+      stato: "ritirato",
+      righe: [{ id: "hx1", pizzaId: "margherita", nome: "Margherita", basePrezzo: 7.5, extra: [], note: "", quantita: 2 }],
+      costoConsegna: 0,
+      totaleFinale: 15,
+      paymentMethod: "cash_at_pickup",
+      paymentStatus: "da pagare",
+      needsPos: false,
+      telefonoCliente: "333 1002002",
+      source: "app",
+      printed: true,
+      printedAt: `${ieri}T19:20:00.000Z`,
+      archived: true,
+      archivedAt: `${ieri}T22:10:00.000Z`,
+      serviceDate: ieri,
+    },
+    {
+      id: "PF-1989",
+      clienteId: "c4",
+      clienteNome: "Davide F.",
+      orderDate: ieri,
+      createdAt: `${ieri}T19:40:00`,
+      dataISO: `${ieri}T17:40:00.000Z`,
+      tipoOrdine: "consegna",
+      orarioScelto: "20:00",
+      stato: "consegnato",
+      righe: [{ id: "hx2", pizzaId: "quattro-formaggi", nome: "Quattro Formaggi", basePrezzo: 10.5, extra: [], note: "", quantita: 3 }],
+      costoConsegna: 0,
+      totaleFinale: 31.5,
+      paymentMethod: "card_on_delivery",
+      paymentStatus: "da pagare",
+      needsPos: true,
+      origineIndirizzo: "salvato",
+      etichettaIndirizzo: "Ufficio",
+      indirizzo: "Viale Monza 118, Milano",
+      citofonoInterno: "Reception 1",
+      telefonoCliente: "333 1002004",
+      noteRider: "",
+      source: "app",
+      printed: true,
+      printedAt: `${ieri}T19:50:00.000Z`,
+      archived: true,
+      archivedAt: `${ieri}T22:10:00.000Z`,
+      serviceDate: ieri,
+    },
+    {
+      id: "PF-1990",
+      clienteId: "c1",
+      clienteNome: "Giulia B.",
+      orderDate: ieri,
+      createdAt: `${ieri}T18:10:00`,
+      dataISO: `${ieri}T16:10:00.000Z`,
+      tipoOrdine: "ritiro",
+      orarioScelto: "19:00",
+      stato: "ritirato",
+      righe: [{ id: "hx3", pizzaId: "diavola", nome: "Diavola", basePrezzo: 9.5, extra: ["Doppia mozzarella"], note: "", quantita: 1 }],
+      costoConsegna: 0,
+      totaleFinale: 11,
+      paymentMethod: "cash_at_pickup",
+      paymentStatus: "da pagare",
+      needsPos: false,
+      telefonoCliente: "333 1002001",
+      source: "telefono",
+      printed: false,
+      archived: true,
+      archivedAt: `${ieri}T22:10:00.000Z`,
+      serviceDate: ieri,
+    },
+  ];
+
+  return [...operativi, ...archiviatiDemo];
+}
 
 const PROFILO_CLIENTE_DEMO: ProfiloClienteDemo = {
   nome: "Giulia Bianchi",
@@ -725,7 +829,7 @@ export default function Home() {
   const [view, setView] = useState<AppView>("cliente");
   const [tabCliente, setTabCliente] = useState<ClienteTab>("home");
   const [carrello, setCarrello] = useState<RigaCarrello[]>([]);
-  const [ordini, setOrdini] = useState<Ordine[]>(ORDINI_INIZIALI);
+  const [ordini, setOrdini] = useState<Ordine[]>(() => buildOrdiniDemoIniziali());
   const [clienti, setClienti] = useState<Cliente[]>(CLIENTI_DEMO);
   const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
   const [profiloCliente, setProfiloCliente] =
@@ -794,6 +898,9 @@ export default function Home() {
   const [marketingMessageNotice, setMarketingMessageNotice] = useState("");
   const [showPrintPreview, setShowPrintPreview] = useState(false);
   const [printPreviewOrders, setPrintPreviewOrders] = useState<Ordine[]>([]);
+  const [adminArchiveNotice, setAdminArchiveNotice] = useState("");
+  const [showFineServizioModal, setShowFineServizioModal] = useState(false);
+  const [archiveResetConfirmInput, setArchiveResetConfirmInput] = useState("");
 
   const totaleCarrello = useMemo(
     () =>
@@ -851,66 +958,115 @@ export default function Home() {
       !indirizzoCheckout?.citta.trim() ||
       !indirizzoCheckout?.citofonoInterno.trim());
 
-  const ordiniOggi = useMemo(() => ordini.filter((o) => new Date(o.dataISO).toDateString() === new Date().toDateString()), [ordini]);
-  const fatturatoDemo = useMemo(() => ordiniOggi.reduce((acc, o) => acc + o.totaleFinale, 0), [ordiniOggi]);
+  const ordiniOperativiOggi = useMemo(() => {
+    const oggi = getTodayOrderDate();
+    return ordini.filter((o) => !o.archived && o.serviceDate === oggi);
+  }, [ordini]);
+  const fatturatoDemo = useMemo(
+    () => ordiniOperativiOggi.reduce((acc, o) => acc + o.totaleFinale, 0),
+    [ordiniOperativiOggi]
+  );
+  const fatturatoStoricoDemo = useMemo(
+    () => ordini.reduce((acc, o) => acc + o.totaleFinale, 0),
+    [ordini]
+  );
+  const ordiniArchiviatiTotali = useMemo(
+    () => ordini.filter((o) => o.archived).length,
+    [ordini]
+  );
+  const ultimaGiornataArchiviataInfo = useMemo(() => {
+    const conData = ordini.filter((o) => o.archived && o.archivedAt);
+    if (!conData.length) return null;
+    const latest = conData.reduce((best, o) => (!best || (o.archivedAt ?? "") > (best.archivedAt ?? "") ? o : best));
+    return { serviceDate: latest.serviceDate, archivedAt: latest.archivedAt ?? "" };
+  }, [ordini]);
+  const riepilogoGiornateArchiviate = useMemo(() => {
+    const map = new Map<string, Ordine[]>();
+    ordini.forEach((o) => {
+      if (!o.archived) return;
+      const list = map.get(o.serviceDate) ?? [];
+      list.push(o);
+      map.set(o.serviceDate, list);
+    });
+    return [...map.entries()]
+      .map(([serviceDate, list]) => {
+        const fatturato = list.reduce((acc, o) => acc + o.totaleFinale, 0);
+        const pizzeVendute = list.reduce(
+          (acc, ordine) => acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
+          0
+        );
+        return {
+          serviceDate,
+          numeroOrdini: list.length,
+          fatturato,
+          pizzeVendute,
+          ordiniRitiro: list.filter((o) => o.tipoOrdine === "ritiro").length,
+          ordiniConsegna: list.filter((o) => o.tipoOrdine === "consegna").length,
+          ordiniTelefonici: list.filter((o) => o.source === "telefono").length,
+          comandeStampate: list.filter((o) => o.printed).length,
+          scontrinoMedio: list.length ? fatturato / list.length : 0,
+        };
+      })
+      .sort((a, b) => b.serviceDate.localeCompare(a.serviceDate));
+  }, [ordini]);
   const incassoOnlineSimulato = useMemo(
     () =>
-      ordiniOggi
+      ordiniOperativiOggi
         .filter((o) => o.paymentStatus === "pagato" && isOnlinePaymentMethod(o.paymentMethod))
         .reduce((acc, o) => acc + o.totaleFinale, 0),
-    [ordiniOggi]
+    [ordiniOperativiOggi]
   );
   const incassoContantiDaRiscuotere = useMemo(
     () =>
-      ordiniOggi
+      ordiniOperativiOggi
         .filter(
           (o) =>
             o.paymentStatus === "da pagare" &&
             (o.paymentMethod === "cash_on_delivery" || o.paymentMethod === "cash_at_pickup")
         )
         .reduce((acc, o) => acc + o.totaleFinale, 0),
-    [ordiniOggi]
+    [ordiniOperativiOggi]
   );
   const incassoPosDaRiscuotere = useMemo(
     () =>
-      ordiniOggi
+      ordiniOperativiOggi
         .filter(
           (o) =>
             o.paymentStatus === "da pagare" &&
             (o.paymentMethod === "card_on_delivery" || o.paymentMethod === "card_at_pickup")
         )
         .reduce((acc, o) => acc + o.totaleFinale, 0),
-    [ordiniOggi]
+    [ordiniOperativiOggi]
   );
-  const scontrinoMedio = ordiniOggi.length ? fatturatoDemo / ordiniOggi.length : 0;
-  const ordiniAttiviCount = ordiniOggi.filter((o) => {
+  const scontrinoMedio = ordiniOperativiOggi.length ? fatturatoDemo / ordiniOperativiOggi.length : 0;
+  const ordiniAttiviCount = ordiniOperativiOggi.filter((o) => {
     const finalState = o.tipoOrdine === "ritiro" ? "ritirato" : "consegnato";
     return o.stato !== finalState;
   }).length;
   const ordiniFiltratiAdmin = useMemo(() => {
-    if (adminFiltro === "tutti") return ordiniOggi;
-    return ordiniOggi.filter((o) => o.tipoOrdine === adminFiltro);
-  }, [adminFiltro, ordiniOggi]);
+    if (adminFiltro === "tutti") return ordiniOperativiOggi;
+    return ordiniOperativiOggi.filter((o) => o.tipoOrdine === adminFiltro);
+  }, [adminFiltro, ordiniOperativiOggi]);
   const ordiniFiltratiStampa = useMemo(() => {
     if (adminPrintFilter === "tutti") return ordiniFiltratiAdmin;
     if (adminPrintFilter === "da-stampare") return ordiniFiltratiAdmin.filter((o) => !o.printed);
     return ordiniFiltratiAdmin.filter((o) => o.printed);
   }, [adminPrintFilter, ordiniFiltratiAdmin]);
   const comandeDaStampare = useMemo(
-    () => ordiniOggi.filter((o) => !o.printed).length,
-    [ordiniOggi]
+    () => ordiniOperativiOggi.filter((o) => !o.printed).length,
+    [ordiniOperativiOggi]
   );
   const comandeStampate = useMemo(
-    () => ordiniOggi.filter((o) => o.printed).length,
-    [ordiniOggi]
+    () => ordiniOperativiOggi.filter((o) => o.printed).length,
+    [ordiniOperativiOggi]
   );
   const ordiniAttiviPerSlot = useMemo(
     () =>
-      ordiniOggi.filter(
+      ordiniOperativiOggi.filter(
         (o) =>
           !["ritirato", "consegnato", "completato", "annullato"].includes(o.stato)
       ),
-    [ordiniOggi]
+    [ordiniOperativiOggi]
   );
   const calcolaSlotCapacity = useMemo(
     () => (pizzeRichieste: number, tipoOrdineSlot: TipoOrdine) =>
@@ -1113,17 +1269,24 @@ export default function Home() {
   const clientiDaTelefono = useMemo(() => clienti.filter((c) => c.source === "telefono"), [clienti]);
   const incassoDaRiscuotere = incassoContantiDaRiscuotere + incassoPosDaRiscuotere;
   const ordiniTelefoniciOggi = useMemo(
-    () => ordiniOggi.filter((o) => o.source === "telefono"),
-    [ordiniOggi]
+    () => ordiniOperativiOggi.filter((o) => o.source === "telefono"),
+    [ordiniOperativiOggi]
   );
   const pizzeVenduteOggi = useMemo(
     () =>
-      ordiniOggi.reduce(
+      ordiniOperativiOggi.reduce(
         (acc, ordine) =>
           acc + ordine.righe.reduce((sum, riga) => sum + riga.quantita, 0),
         0
       ),
-    [ordiniOggi]
+    [ordiniOperativiOggi]
+  );
+  const ordiniPerStoricoCliente = useMemo(
+    () =>
+      [...ordini].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      ),
+    [ordini]
   );
   const pizzaStats = useMemo(() => {
     const totalePizze = Math.max(
@@ -1239,14 +1402,14 @@ export default function Home() {
   );
   const topPizzaDelGiorno = useMemo(() => {
     const map = new Map<string, number>();
-    ordiniOggi.forEach((ordine) =>
+    ordiniOperativiOggi.forEach((ordine) =>
       ordine.righe.forEach((riga) =>
         map.set(riga.nome, (map.get(riga.nome) ?? 0) + riga.quantita)
       )
     );
     if (!map.size) return "-";
     return [...map.entries()].sort((a, b) => b[1] - a[1])[0][0];
-  }, [ordiniOggi]);
+  }, [ordiniOperativiOggi]);
   const extraPiuUsato = extraStats[0]?.ingrediente ?? "-";
   const customerAnalytics = useMemo(() => {
     return clienti.map((cliente) => {
@@ -1354,6 +1517,8 @@ export default function Home() {
       noteRider: tipoOrdine === "consegna" ? indirizzoCheckout?.noteConsegna : undefined,
       source: "app",
       printed: false,
+      archived: false,
+      serviceDate: getTodayOrderDate(),
     };
     setOrdini((prev) => [nuovoOrdine, ...prev]);
     setClienti((prev) =>
@@ -1431,9 +1596,11 @@ export default function Home() {
   }
 
   function avanzaStatoOrdine(ordineId: string) {
+    const oggi = getTodayOrderDate();
     setOrdini((prev) =>
       prev.map((ordine) => {
         if (ordine.id !== ordineId) return ordine;
+        if (ordine.archived || ordine.serviceDate !== oggi) return ordine;
         const pipeline = getPipelineByTipo(ordine.tipoOrdine);
         const currentIndex = pipeline.indexOf(ordine.stato);
         if (currentIndex === -1 || currentIndex >= pipeline.length - 1) return ordine;
@@ -1443,8 +1610,10 @@ export default function Home() {
   }
 
   function avanzaTuttiOrdiniAttivi() {
+    const oggi = getTodayOrderDate();
     setOrdini((prev) =>
       prev.map((ordine) => {
+        if (ordine.archived || ordine.serviceDate !== oggi) return ordine;
         const pipeline = getPipelineByTipo(ordine.tipoOrdine);
         const currentIndex = pipeline.indexOf(ordine.stato);
         if (currentIndex === -1 || currentIndex >= pipeline.length - 1) return ordine;
@@ -1589,6 +1758,143 @@ export default function Home() {
     return `Ciao ${nome}, riordina la tua solita pizza dall'app entro 7 giorni e ricevi un extra omaggio.`;
   }
 
+  function apriModalFineServizio() {
+    setArchiveResetConfirmInput("");
+    setShowFineServizioModal(true);
+  }
+
+  function chiudiModalFineServizio() {
+    setShowFineServizioModal(false);
+    setArchiveResetConfirmInput("");
+  }
+
+  function eseguiArchiviazioneGiornataDopoConferma() {
+    if (archiveResetConfirmInput !== "RESET") return;
+    const now = new Date().toISOString();
+    const oggi = getTodayOrderDate();
+    setOrdini((prev) =>
+      prev.map((o) =>
+        !o.archived && o.serviceDate === oggi ? { ...o, archived: true, archivedAt: now } : o
+      )
+    );
+    setAdminArchiveNotice("Giornata archiviata correttamente. Kanban pronto per il nuovo servizio.");
+    chiudiModalFineServizio();
+  }
+
+  function creaNuovaGiornataDemo() {
+    const oggi = getTodayOrderDate();
+    const now = new Date().toISOString();
+    const slots = generaSlotOrari();
+    const slotA = slots[Math.min(6, Math.max(0, slots.length - 1))] ?? ORARI_PIZZERIA.openingTime;
+    const slotB = slots[Math.min(10, Math.max(0, slots.length - 1))] ?? ORARI_PIZZERIA.openingTime;
+    const ts = Date.now();
+    const nuovi: Ordine[] = [
+      {
+        id: `PF-${ts}-d1`,
+        clienteId: "c2",
+        clienteNome: "Luca P.",
+        orderDate: oggi,
+        createdAt: now,
+        dataISO: now,
+        tipoOrdine: "ritiro",
+        orarioScelto: slotA,
+        stato: "ricevuto",
+        righe: [
+          {
+            id: crypto.randomUUID(),
+            pizzaId: "margherita",
+            nome: "Margherita",
+            basePrezzo: 7.5,
+            extra: [],
+            note: "",
+            quantita: 1,
+          },
+        ],
+        costoConsegna: 0,
+        totaleFinale: 7.5,
+        paymentMethod: "cash_at_pickup",
+        paymentStatus: "da pagare",
+        needsPos: false,
+        telefonoCliente: "333 1002002",
+        source: "app",
+        printed: false,
+        archived: false,
+        serviceDate: oggi,
+      },
+      {
+        id: `PF-${ts}-d2`,
+        clienteId: "c3",
+        clienteNome: "Marta R.",
+        orderDate: oggi,
+        createdAt: now,
+        dataISO: now,
+        tipoOrdine: "consegna",
+        orarioScelto: slotB,
+        stato: "ricevuto",
+        righe: [
+          {
+            id: crypto.randomUUID(),
+            pizzaId: "diavola",
+            nome: "Diavola",
+            basePrezzo: 9.5,
+            extra: [],
+            note: "",
+            quantita: 2,
+          },
+        ],
+        costoConsegna: 2.5,
+        totaleFinale: 21.5,
+        paymentMethod: "cash_on_delivery",
+        paymentStatus: "da pagare",
+        needsPos: false,
+        origineIndirizzo: "salvato",
+        etichettaIndirizzo: "Casa",
+        indirizzo: "Via Roma 24, Milano",
+        citofonoInterno: "Rossi, Int. 3B",
+        telefonoCliente: "333 1002003",
+        noteRider: "",
+        source: "app",
+        printed: false,
+        archived: false,
+        serviceDate: oggi,
+      },
+      {
+        id: `PF-${ts}-d3`,
+        clienteId: "c1",
+        clienteNome: "Giulia B.",
+        orderDate: oggi,
+        createdAt: now,
+        dataISO: now,
+        tipoOrdine: "ritiro",
+        orarioScelto: slotA,
+        stato: "accettato",
+        righe: [
+          {
+            id: crypto.randomUUID(),
+            pizzaId: "bufalina",
+            nome: "Bufalina",
+            basePrezzo: 11,
+            extra: [],
+            note: "Demo nuova giornata",
+            quantita: 1,
+          },
+        ],
+        costoConsegna: 0,
+        totaleFinale: 11,
+        paymentMethod: "card_at_pickup",
+        paymentStatus: "da pagare",
+        needsPos: true,
+        telefonoCliente: "333 1002001",
+        source: "telefono",
+        printed: false,
+        archived: false,
+        serviceDate: oggi,
+      },
+    ];
+    setOrdini((prev) => [...nuovi, ...prev]);
+    setAdminArchiveNotice("Nuovi ordini demo aggiunti per il Kanban.");
+  }
+
   function applicaCapacitaDemo() {
     const deliveriesByRider = Math.max(
       0,
@@ -1681,6 +1987,8 @@ export default function Home() {
       telefonoCliente: manualCustomerPhone.trim(),
       source: "telefono",
       printed: false,
+      archived: false,
+      serviceDate: getTodayOrderDate(),
     };
     setOrdini((prev) => [nuovoOrdine, ...prev]);
     setClienti((prev) => {
@@ -1719,6 +2027,12 @@ export default function Home() {
     const timeout = window.setTimeout(() => setMenuAddToast(""), 2200);
     return () => window.clearTimeout(timeout);
   }, [menuAddToast]);
+
+  useEffect(() => {
+    if (!adminArchiveNotice) return;
+    const timeout = window.setTimeout(() => setAdminArchiveNotice(""), 4500);
+    return () => window.clearTimeout(timeout);
+  }, [adminArchiveNotice]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -2126,7 +2440,7 @@ export default function Home() {
 
               {tabCliente === "storico" && (
                 <div className="space-y-3">
-                  {ordini.map((ordine) => (
+                  {ordiniPerStoricoCliente.map((ordine) => (
                     <article key={ordine.id} className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
                       <div className="flex items-center justify-between">
                         <h3 className="font-semibold">{ordine.id}</h3>
@@ -2397,17 +2711,18 @@ export default function Home() {
                   <button onClick={() => setAdminTab("rfm")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "rfm" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>RFM</button>
                   <button onClick={() => setAdminTab("prodotti")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "prodotti" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Prodotti</button>
                   <button onClick={() => setAdminTab("marketing")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "marketing" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Marketing</button>
+                  <button onClick={() => setAdminTab("archivio")} className={`rounded-xl px-3 py-2 text-xs font-semibold ${adminTab === "archivio" ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"}`}>Archivio</button>
                 </div>
               </div>
 
               {adminTab === "ordini" && (
                 <section className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
-                    <MetricCard titolo="Ordini oggi" valore={String(ordiniOggi.length)} />
+                    <MetricCard titolo="Ordini operativi oggi" valore={String(ordiniOperativiOggi.length)} />
                     <MetricCard titolo="Comande da stampare" valore={String(comandeDaStampare)} />
                   </div>
                   <button
-                    onClick={() => apriAnteprimaComanda(ordiniOggi.filter((o) => !o.printed))}
+                    onClick={() => apriAnteprimaComanda(ordiniOperativiOggi.filter((o) => !o.printed))}
                     disabled={comandeDaStampare === 0}
                     className="w-full rounded-xl bg-[#8f3b18] px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -2474,38 +2789,44 @@ export default function Home() {
                     <button onClick={() => setAdminPrintFilter("da-stampare")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "da-stampare" ? "bg-amber-100 text-amber-800" : "text-[#82513a]"}`}>Da stampare</button>
                     <button onClick={() => setAdminPrintFilter("stampati")} className={`rounded-xl py-2 text-xs font-semibold ${adminPrintFilter === "stampati" ? "bg-emerald-100 text-emerald-800" : "text-[#82513a]"}`}>Stampati</button>
                   </div>
-                  <div className="flex gap-3 overflow-x-auto pb-1">
-                    {KANBAN_COLUMNS.map((column) => {
-                      const ordiniColonna = ordiniFiltratiStampa.filter((ordine) => getKanbanColumn(ordine.stato) === column.key);
-                      return (
-                        <div key={column.key} className="w-[16.5rem] shrink-0 rounded-2xl border border-[#f0d7c7] bg-[#fff7f0] p-3">
-                          <div className="mb-2 flex items-center justify-between">
-                            <h3 className="text-sm font-bold text-[#8f3b18]">{column.titolo}</h3>
-                            <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-[#82513a]">{ordiniColonna.length}</span>
+                  {ordiniOperativiOggi.length === 0 ? (
+                    <p className="rounded-2xl border border-[#ecd7c8] bg-[#fffaf6] p-6 text-center text-sm text-[#6d4331]">
+                      Nessun ordine operativo. Il Kanban è pronto per il prossimo servizio.
+                    </p>
+                  ) : (
+                    <div className="flex gap-3 overflow-x-auto pb-1">
+                      {KANBAN_COLUMNS.map((column) => {
+                        const ordiniColonna = ordiniFiltratiStampa.filter((ordine) => getKanbanColumn(ordine.stato) === column.key);
+                        return (
+                          <div key={column.key} className="w-[16.5rem] shrink-0 rounded-2xl border border-[#f0d7c7] bg-[#fff7f0] p-3">
+                            <div className="mb-2 flex items-center justify-between">
+                              <h3 className="text-sm font-bold text-[#8f3b18]">{column.titolo}</h3>
+                              <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-[#82513a]">{ordiniColonna.length}</span>
+                            </div>
+                            <div className="space-y-2">
+                              {ordiniColonna.length === 0 && <p className="rounded-xl bg-white p-3 text-xs text-[#9a715c]">Nessun ordine</p>}
+                              {ordiniColonna.map((ordine) => (
+                                <article key={ordine.id} className="rounded-xl border border-[#ecd7c8] bg-white p-3">
+                                  <div className="flex items-center justify-between">
+                                    <p className="text-sm font-semibold">{ordine.id}</p>
+                                    <p className="text-xs font-semibold">{formatEuro(ordine.totaleFinale)}</p>
+                                  </div>
+                                  <p className="mt-1 text-xs text-[#82513a]">Cliente: {ordine.clienteNome}</p>
+                                  <div className="mt-2 flex flex-wrap gap-1">
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.tipoOrdine === "ritiro" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>{ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}</span>
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.source === "telefono" ? "bg-orange-100 text-orange-800" : "bg-emerald-100 text-emerald-800"}`}>{ordine.source === "telefono" ? "TELEFONICO" : "APP"}</span>
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.printed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>{ordine.printed ? "COMANDA STAMPATA" : "DA STAMPARE"}</span>
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.paymentStatus === "pagato" ? "bg-emerald-100 text-emerald-800" : "bg-orange-100 text-orange-800"}`}>{ordine.paymentStatus === "pagato" ? "PAGATO" : "DA INCASSARE"}</span>
+                                  </div>
+                                  <button onClick={() => avanzaStatoOrdine(ordine.id)} disabled={ordine.stato === (ordine.tipoOrdine === "ritiro" ? "ritirato" : "consegnato")} className="mt-2 w-full rounded-lg bg-[#8f3b18] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Avanza stato</button>
+                                </article>
+                              ))}
+                            </div>
                           </div>
-                          <div className="space-y-2">
-                            {ordiniColonna.length === 0 && <p className="rounded-xl bg-white p-3 text-xs text-[#9a715c]">Nessun ordine</p>}
-                            {ordiniColonna.map((ordine) => (
-                              <article key={ordine.id} className="rounded-xl border border-[#ecd7c8] bg-white p-3">
-                                <div className="flex items-center justify-between">
-                                  <p className="text-sm font-semibold">{ordine.id}</p>
-                                  <p className="text-xs font-semibold">{formatEuro(ordine.totaleFinale)}</p>
-                                </div>
-                                <p className="mt-1 text-xs text-[#82513a]">Cliente: {ordine.clienteNome}</p>
-                                <div className="mt-2 flex flex-wrap gap-1">
-                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.tipoOrdine === "ritiro" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>{ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}</span>
-                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.source === "telefono" ? "bg-orange-100 text-orange-800" : "bg-emerald-100 text-emerald-800"}`}>{ordine.source === "telefono" ? "TELEFONICO" : "APP"}</span>
-                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.printed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>{ordine.printed ? "COMANDA STAMPATA" : "DA STAMPARE"}</span>
-                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ordine.paymentStatus === "pagato" ? "bg-emerald-100 text-emerald-800" : "bg-orange-100 text-orange-800"}`}>{ordine.paymentStatus === "pagato" ? "PAGATO" : "DA INCASSARE"}</span>
-                                </div>
-                                <button onClick={() => avanzaStatoOrdine(ordine.id)} disabled={ordine.stato === (ordine.tipoOrdine === "ritiro" ? "ritirato" : "consegnato")} className="mt-2 w-full rounded-lg bg-[#8f3b18] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Avanza stato</button>
-                              </article>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </section>
               )}
 
@@ -2963,12 +3284,94 @@ export default function Home() {
                   {marketingMessageNotice && <p className="mt-3 rounded-xl bg-[#f4dfd0] p-3 text-xs text-[#6d4331]">{marketingMessageNotice}</p>}
                 </section>
               )}
+
+              {adminTab === "archivio" && (
+                <section className="space-y-3">
+                  <h2 className="text-sm font-bold uppercase tracking-wide text-[#9a715c]">Archivio giornate</h2>
+                  <p className="text-xs text-[#6d4331]">
+                    Riepiloghi calcolati dagli ordini archiviati nella demo locale.
+                  </p>
+                  {riepilogoGiornateArchiviate.length === 0 ? (
+                    <p className="rounded-xl bg-[#fff7f0] p-3 text-xs text-[#82513a]">Nessuna giornata archiviata ancora.</p>
+                  ) : (
+                    <div className="grid gap-3">
+                      {riepilogoGiornateArchiviate.map((g) => (
+                        <article key={g.serviceDate} className="rounded-2xl border border-[#ecd7c8] bg-white p-4 text-sm">
+                          <p className="font-semibold text-[#8f3b18]">{formatItalianDate(g.serviceDate)}</p>
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-[#6d4331]">
+                            <p>
+                              Ordini: <span className="font-semibold">{g.numeroOrdini}</span>
+                            </p>
+                            <p>
+                              Fatturato: <span className="font-semibold">{formatEuro(g.fatturato)}</span>
+                            </p>
+                            <p>
+                              Pizze vendute: <span className="font-semibold">{g.pizzeVendute}</span>
+                            </p>
+                            <p>
+                              Scontrino medio: <span className="font-semibold">{formatEuro(g.scontrinoMedio)}</span>
+                            </p>
+                            <p>
+                              Ordini ritiro: <span className="font-semibold">{g.ordiniRitiro}</span>
+                            </p>
+                            <p>
+                              Ordini consegna: <span className="font-semibold">{g.ordiniConsegna}</span>
+                            </p>
+                            <p>
+                              Ordini telefonici: <span className="font-semibold">{g.ordiniTelefonici}</span>
+                            </p>
+                            <p>
+                              Comande stampate: <span className="font-semibold">{g.comandeStampate}</span>
+                            </p>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+
               {adminTab === "dashboard" && (
                 <>
+                  {adminArchiveNotice && (
+                    <p className="rounded-xl bg-[#f4dfd0] p-3 text-sm font-semibold text-[#6d4331]">{adminArchiveNotice}</p>
+                  )}
+                  <section className="rounded-2xl border border-[#d59e7d] bg-[#fff7f0] p-4">
+                    <h2 className="font-semibold text-[#8f3b18]">Fine servizio</h2>
+                    <p className="mt-2 text-sm text-[#6d4331]">
+                      Archivia gli ordini di oggi e prepara il Kanban per una nuova giornata. Gli ordini resteranno nello storico clienti e nelle statistiche.
+                    </p>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={apriModalFineServizio}
+                        className="rounded-xl bg-[#8f3b18] px-4 py-3 text-sm font-semibold text-white"
+                      >
+                        Archivia giornata e resetta Kanban
+                      </button>
+                      <button
+                        type="button"
+                        onClick={creaNuovaGiornataDemo}
+                        className="rounded-xl border border-[#d59e7d] bg-white px-4 py-3 text-sm font-semibold text-[#8f3b18]"
+                      >
+                        Crea nuova giornata demo
+                      </button>
+                    </div>
+                  </section>
                   <section className="grid grid-cols-2 gap-3">
-                    <MetricCard titolo="Ordini oggi" valore={String(ordiniOggi.length)} />
-                    <MetricCard titolo="Fatturato oggi" valore={formatEuro(fatturatoDemo)} />
-                    <MetricCard titolo="Scontrino medio" valore={formatEuro(scontrinoMedio)} />
+                    <MetricCard titolo="Ordini operativi oggi" valore={String(ordiniOperativiOggi.length)} />
+                    <MetricCard titolo="Ordini archiviati totali" valore={String(ordiniArchiviatiTotali)} />
+                    <MetricCard
+                      titolo="Ultima giornata archiviata"
+                      valore={
+                        ultimaGiornataArchiviataInfo
+                          ? formatItalianDate(ultimaGiornataArchiviataInfo.serviceDate)
+                          : "—"
+                      }
+                    />
+                    <MetricCard titolo="Fatturato storico demo" valore={formatEuro(fatturatoStoricoDemo)} />
+                    <MetricCard titolo="Fatturato oggi (operativo)" valore={formatEuro(fatturatoDemo)} />
+                    <MetricCard titolo="Scontrino medio (oggi)" valore={formatEuro(scontrinoMedio)} />
                     <MetricCard titolo="Pizze vendute oggi" valore={String(pizzeVenduteOggi)} />
                     <MetricCard titolo="Comande da stampare" valore={String(comandeDaStampare)} />
                     <MetricCard titolo="Slot critici/sovraccarichi" valore={String(slotCriticiCount)} />
@@ -3076,6 +3479,91 @@ export default function Home() {
             <div className="mt-4 grid grid-cols-2 gap-3">
               <button onClick={() => setPizzaSelezionata(null)} className="rounded-xl border border-[#d59e7d] py-3 font-semibold">Annulla</button>
               <button onClick={aggiungiPizza} className="rounded-xl bg-[#8f3b18] py-3 font-semibold text-white">Aggiungi</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFineServizioModal && (
+        <div
+          className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-3 pt-8 pb-10"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="fine-servizio-modal-title"
+          onClick={chiudiModalFineServizio}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-[#ecc8b1] bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="fine-servizio-modal-title" className="text-lg font-bold text-[#3a1f12]">
+              Conferma fine servizio
+            </h3>
+            <p className="mt-3 text-sm leading-relaxed text-[#6d4331]">
+              Stai per archiviare tutti gli ordini operativi di oggi e svuotare il Kanban.
+              Gli ordini non verranno eliminati: resteranno nello storico clienti e nelle statistiche.
+              Questa azione è pensata per fine giornata/fine servizio.
+            </p>
+            <div className="mt-4 rounded-2xl bg-[#fff7f0] p-4 text-sm text-[#6d4331]">
+              <p className="font-semibold text-[#8f3b18]">Riepilogo operativo</p>
+              <ul className="mt-2 space-y-2 text-xs sm:text-sm">
+                <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
+                  <span>Ordini operativi da archiviare</span>
+                  <span className="font-semibold tabular-nums">{ordiniOperativiOggi.length}</span>
+                </li>
+                <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
+                  <span>Comande ancora da stampare</span>
+                  <span className="font-semibold tabular-nums">{comandeDaStampare}</span>
+                </li>
+                <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
+                  <span>Ordini non completati</span>
+                  <span className="font-semibold tabular-nums">{ordiniAttiviCount}</span>
+                </li>
+                <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
+                  <span>Fatturato operativo della giornata</span>
+                  <span className="font-semibold tabular-nums">{formatEuro(fatturatoDemo)}</span>
+                </li>
+                <li className="flex justify-between gap-3 pt-1">
+                  <span>Pizze (operativo di oggi)</span>
+                  <span className="font-semibold tabular-nums">{pizzeVenduteOggi}</span>
+                </li>
+              </ul>
+            </div>
+            {ordiniAttiviCount > 0 && (
+              <div className="mt-4 rounded-xl border-2 border-amber-500 bg-amber-50 p-3 text-sm font-semibold text-amber-950">
+                Attenzione: ci sono ordini non completati. Assicurati che il servizio sia davvero finito.
+              </div>
+            )}
+            <label className="mt-4 block text-sm font-semibold text-[#3a1f12]" htmlFor="archive-reset-confirm">
+              Scrivi RESET per confermare
+              <input
+                id="archive-reset-confirm"
+                type="text"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                value={archiveResetConfirmInput}
+                onChange={(e) => setArchiveResetConfirmInput(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-[#ecc8b1] bg-white px-3 py-3 text-base font-mono text-[#3a1f12] outline-none ring-[#8f3b18] focus:ring-2"
+                placeholder="RESET"
+              />
+            </label>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row-reverse sm:justify-end">
+              <button
+                type="button"
+                disabled={archiveResetConfirmInput !== "RESET"}
+                onClick={eseguiArchiviazioneGiornataDopoConferma}
+                className="w-full rounded-xl bg-red-600 px-4 py-3 text-sm font-bold text-white shadow-sm ring-red-700 transition enabled:hover:bg-red-700 enabled:focus-visible:ring-2 disabled:cursor-not-allowed disabled:bg-red-300 disabled:text-red-100 sm:w-auto sm:min-w-[11rem]"
+              >
+                Conferma reset giornata
+              </button>
+              <button
+                type="button"
+                onClick={chiudiModalFineServizio}
+                className="w-full rounded-xl border border-[#d59e7d] bg-white px-4 py-3 text-sm font-semibold text-[#8f3b18] sm:w-auto"
+              >
+                Annulla
+              </button>
             </div>
           </div>
         </div>
