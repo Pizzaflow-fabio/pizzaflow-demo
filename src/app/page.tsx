@@ -1009,6 +1009,7 @@ export default function Home() {
   const [profileDemoSavedNotice, setProfileDemoSavedNotice] = useState("");
   const [showReorderPicker, setShowReorderPicker] = useState(false);
   const [showSvuotaCarrelloModal, setShowSvuotaCarrelloModal] = useState(false);
+  const [showEliminaTutteNotificheModal, setShowEliminaTutteNotificheModal] = useState(false);
   const [clientePreventivoNotice, setClientePreventivoNotice] = useState("");
   const [adminOrdineAzioniNotice, setAdminOrdineAzioniNotice] = useState("");
   const [adminOrdineDettaglioEspanso, setAdminOrdineDettaglioEspanso] = useState<Record<string, boolean>>({});
@@ -1829,9 +1830,24 @@ export default function Home() {
     ]);
   }
 
+  function eliminaNotificaCliente(notificaId: string) {
+    setNotificheCliente((prev) => prev.filter((n) => n.id !== notificaId));
+  }
+
+  function segnaTutteNotificheLetteCliente() {
+    setNotificheCliente((prev) =>
+      prev.map((n) => (n.clienteId === profiloCliente.id ? { ...n, letta: true } : n))
+    );
+  }
+
+  function confermaEliminaTutteNotificheCliente() {
+    setNotificheCliente((prev) => prev.filter((n) => n.clienteId !== profiloCliente.id));
+    setShowEliminaTutteNotificheModal(false);
+  }
+
   const apriTabCliente = useCallback(
     (tab: ClienteTab) => {
-      if (tab === "storico" || tab === "notifiche") {
+      if (tab === "storico") {
         setNotificheCliente((prev) =>
           prev.map((n) => (n.clienteId === profiloCliente.id ? { ...n, letta: true } : n))
         );
@@ -2624,11 +2640,30 @@ export default function Home() {
                     <p className="mt-2 text-xs leading-relaxed text-[#6d4331]">
                       Simulazione comunicazioni dalla pizzeria. Nessuna notifica push reale.
                     </p>
+                    {notificheClienteCorrente.length > 0 ? (
+                      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                        <button
+                          type="button"
+                          onClick={segnaTutteNotificheLetteCliente}
+                          disabled={notificheClienteNonLette === 0}
+                          className="w-full rounded-xl border border-[#d59e7d] bg-[#fff7f0] py-2.5 text-xs font-semibold text-[#8f3b18] disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto sm:min-w-[10rem] sm:flex-1"
+                        >
+                          Segna tutte come lette
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowEliminaTutteNotificheModal(true)}
+                          className="w-full rounded-xl border border-[#c45a3a] bg-white py-2.5 text-xs font-semibold text-[#8f3b18] sm:w-auto sm:min-w-[10rem] sm:flex-1"
+                        >
+                          Elimina tutte
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="space-y-2">
                     {notificheClienteCorrente.length === 0 ? (
                       <p className="rounded-2xl border border-[#ecd7c8] bg-[#fffaf6] p-6 text-center text-sm text-[#82513a]">
-                        Nessuna notifica.
+                        Nessun avviso. Qui vedrai aggiornamenti sui tuoi ordini.
                       </p>
                     ) : (
                       notificheClienteCorrente.map((n) => (
@@ -2638,14 +2673,25 @@ export default function Home() {
                             n.letta ? "border-[#ecd7c8] bg-white" : "border-[#8f3b18]/40 bg-[#fff7f0]"
                           }`}
                         >
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#9a715c]">
-                            {formatItalianDate(n.createdAt.slice(0, 10))} · {formatItalianTime(n.createdAt)}
-                            {!n.letta ? (
-                              <span className="ml-2 rounded-full bg-[#8f3b18] px-2 py-0.5 text-[9px] font-bold text-white">
-                                Nuova
-                              </span>
-                            ) : null}
-                          </p>
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="min-w-0 flex-1 text-[10px] font-semibold uppercase tracking-wide text-[#9a715c]">
+                              {formatItalianDate(n.createdAt.slice(0, 10))} · {formatItalianTime(n.createdAt)}
+                              {!n.letta ? (
+                                <span className="ml-2 inline-block rounded-full bg-[#8f3b18] px-2 py-0.5 text-[9px] font-bold text-white">
+                                  Nuova
+                                </span>
+                              ) : null}
+                            </p>
+                            <button
+                              type="button"
+                              aria-label="Elimina avviso"
+                              title="Elimina"
+                              onClick={() => eliminaNotificaCliente(n.id)}
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-lg font-light leading-none text-[#82513a] hover:bg-[#f4dfd0] active:bg-[#ecd7c8]"
+                            >
+                              ×
+                            </button>
+                          </div>
                           <p className="mt-2 leading-relaxed text-[#3a1f12]">{n.testo}</p>
                           {n.ordineId ? (
                             <button
@@ -4507,7 +4553,7 @@ export default function Home() {
               </button>
               <button
                 className={`relative rounded-xl py-2 ${tabCliente === "notifiche" ? "bg-[#f4dfd0]" : ""}`}
-                onClick={() => apriTabCliente("notifiche")}
+                onClick={() => setTabCliente("notifiche")}
               >
                 Avvisi
                 {notificheClienteNonLette > 0 ? (
@@ -4589,6 +4635,44 @@ export default function Home() {
               <button
                 type="button"
                 onClick={chiudiModalSvuotaCarrello}
+                className="w-full rounded-xl border border-[#d59e7d] bg-white py-3 text-sm font-semibold text-[#8f3b18] sm:flex-1"
+              >
+                Annulla
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEliminaTutteNotificheModal && (
+        <div
+          className="fixed inset-0 z-20 flex items-center justify-center bg-black/35 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="elimina-tutte-notifiche-title"
+          onClick={() => setShowEliminaTutteNotificheModal(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl border border-[#ecc8b1] bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="elimina-tutte-notifiche-title" className="text-lg font-bold text-[#3a1f12]">
+              Vuoi eliminare tutte le notifiche?
+            </h3>
+            <p className="mt-3 text-sm leading-relaxed text-[#6d4331]">
+              Gli ordini resteranno comunque disponibili nello storico.
+            </p>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row-reverse">
+              <button
+                type="button"
+                onClick={confermaEliminaTutteNotificheCliente}
+                className="w-full rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white sm:flex-1"
+              >
+                Elimina notifiche
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowEliminaTutteNotificheModal(false)}
                 className="w-full rounded-xl border border-[#d59e7d] bg-white py-3 text-sm font-semibold text-[#8f3b18] sm:flex-1"
               >
                 Annulla
