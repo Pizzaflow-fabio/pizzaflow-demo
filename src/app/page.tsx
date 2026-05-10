@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 type AppView = "cliente" | "admin";
 type ClienteTab = "home" | "menu" | "carrello" | "storico" | "notifiche" | "profilo";
 type TipoOrdine = "ritiro" | "consegna";
+type MenuCategoria = "pizze" | "bevande" | "dolci" | "combo";
 type AdminFiltro = "tutti" | "ritiro" | "consegna";
 type KanbanColonna =
   | "ricevuto"
@@ -82,17 +83,95 @@ type Pizza = {
   descrizione: string;
   prezzo: number;
   ingredienti: string[];
+  available: boolean;
+  soldOutReason?: string;
 };
+
+type ExtraIngredienteConfig = {
+  nome: string;
+  prezzo: number;
+  available: boolean;
+  soldOutReason?: string;
+};
+
+type MenuItemBase = {
+  id: string;
+  nome: string;
+  descrizione: string;
+  prezzo: number;
+  available: boolean;
+  soldOutReason?: string;
+};
+
+type ImpastoOption = {
+  id: string;
+  nome: string;
+  prezzoExtra: number;
+  available: boolean;
+  soldOutReason?: string;
+};
+
+const CLIENTE_COPY_PRODOTTO_ESAURITO = "Temporaneamente non disponibile";
+const CLIENTE_COPY_CARRELLO_PRODOTTO_ESAURITO =
+  "Prodotto temporaneamente non disponibile. Rimuovilo dal carrello per continuare.";
+const ADMIN_COPY_NESSUN_MOTIVO_INTERNO = "Nessun motivo interno inserito.";
+
+type ComboDettaglioPizzaBibita = {
+  kind: "pizza-bibita";
+  pizzaId: string;
+  pizzaNome: string;
+  pizzaPrezzoComponente: number;
+  impastoId?: string;
+  impastoNome?: string;
+  impastoPrezzoExtra?: number;
+  extra: string[];
+  notePizza: string;
+  bibitaId: string;
+  bibitaNome: string;
+  bibitaPrezzo: number;
+  scontoCombo: number;
+};
+
+type ComboDettaglioFamiglia = {
+  kind: "famiglia";
+  pizze: Array<{ pizzaId: string; nome: string; note?: string }>;
+  bibite: Array<{ id: string; nome: string }>;
+  prezzoFisso: number;
+};
+
+type ComboDettaglioDolce = {
+  kind: "dolce";
+  pizzaId: string;
+  pizzaNome: string;
+  pizzaPrezzoComponente: number;
+  impastoId?: string;
+  impastoNome?: string;
+  impastoPrezzoExtra?: number;
+  extra: string[];
+  notePizza: string;
+  dolceId: string;
+  dolceNome: string;
+  dolcePrezzo: number;
+  scontoCombo: number;
+};
+
+type ComboDettaglio = ComboDettaglioPizzaBibita | ComboDettaglioFamiglia | ComboDettaglioDolce;
 
 type RigaCarrello = {
   id: string;
+  categoria?: MenuCategoria;
   pizzaId: string;
   nome: string;
   basePrezzo: number;
   extra: string[];
   note: string;
   quantita: number;
+  impastoId?: string;
+  impastoNome?: string;
+  impastoPrezzoExtra?: number;
+  capacityPizzaUnit?: number;
   ingredientiRimossi?: string[];
+  comboDettaglio?: ComboDettaglio;
 };
 
 type PaymentMethod =
@@ -174,14 +253,67 @@ type Cliente = {
   source: CustomerSource;
 };
 
-const EXTRA_PREZZI: Record<string, number> = {
-  Burrata: 2.5,
-  Nduja: 1.5,
-  "Funghi porcini": 2,
-  "Olive taggiasche": 1.5,
-  "Cipolla caramellata": 1,
-  "Doppia mozzarella": 1.5,
-};
+const EXTRA_INGREDIENTI_DEMO: ExtraIngredienteConfig[] = [
+  { nome: "Burrata", prezzo: 2.5, available: true },
+  { nome: "Nduja", prezzo: 1.5, available: true },
+  { nome: "Funghi porcini", prezzo: 2, available: true },
+  { nome: "Olive taggiasche", prezzo: 1.5, available: true },
+  { nome: "Cipolla caramellata", prezzo: 1, available: true },
+  { nome: "Doppia mozzarella", prezzo: 1.5, available: true },
+];
+const IMPASTI_DEMO: ImpastoOption[] = [
+  { id: "classico", nome: "Classico", prezzoExtra: 0, available: true },
+  { id: "integrale", nome: "Integrale", prezzoExtra: 1.5, available: true },
+  { id: "carbone", nome: "Carbone vegetale", prezzoExtra: 2, available: true },
+  { id: "senza-glutine", nome: "Senza glutine", prezzoExtra: 3, available: true },
+];
+const BEVANDE_DEMO: MenuItemBase[] = [
+  { id: "acqua-naturale-50", nome: "Acqua naturale 50cl", descrizione: "Bottiglietta", prezzo: 1.2, available: true },
+  { id: "acqua-frizzante-50", nome: "Acqua frizzante 50cl", descrizione: "Bottiglietta", prezzo: 1.2, available: true },
+  { id: "coca-cola-33", nome: "Coca-Cola 33cl", descrizione: "Lattina", prezzo: 2.5, available: true },
+  { id: "coca-cola-zero-33", nome: "Coca-Cola Zero 33cl", descrizione: "Lattina", prezzo: 2.5, available: true },
+  { id: "fanta-33", nome: "Fanta 33cl", descrizione: "Lattina", prezzo: 2.5, available: true },
+  { id: "birra-33", nome: "Birra 33cl", descrizione: "Bottiglia", prezzo: 3.5, available: true },
+];
+const DOLCI_DEMO: MenuItemBase[] = [
+  { id: "tiramisu", nome: "Tiramisù monoporzione", descrizione: "Fresco", prezzo: 4.5, available: true },
+  { id: "panna-cotta", nome: "Panna cotta", descrizione: "Con caramello", prezzo: 4, available: true },
+  { id: "gelato-vaniglia-cioccolato", nome: "Gelato coppetta vaniglia e cioccolato", descrizione: "Coppetta", prezzo: 3.5, available: true },
+  { id: "gelato-pistacchio", nome: "Gelato coppetta pistacchio", descrizione: "Coppetta", prezzo: 3.5, available: true },
+  { id: "tartufo-nero", nome: "Tartufo nero", descrizione: "Monoporzione", prezzo: 4, available: true },
+];
+const COMBO_SCONTO_EUR = 1;
+const COMBO_FAMIGLIA_PREZZO_FISSO = 39.9;
+
+const COMBO_DEMO: Array<MenuItemBase & { capacityPizzaUnit: number }> = [
+  {
+    id: "combo-pizza-bibita",
+    nome: "Combo Pizza + Bibita",
+    descrizione: "Scegli pizza (con impasto, extra e note) + bibita. Sconto EUR 1.00 sul totale.",
+    prezzo: 11.9,
+    available: true,
+    capacityPizzaUnit: 1,
+  },
+  {
+    id: "combo-famiglia",
+    nome: "Combo Famiglia",
+    descrizione: "4 pizze a scelta + 2 bibite. Prezzo fisso EUR 39.90.",
+    prezzo: COMBO_FAMIGLIA_PREZZO_FISSO,
+    available: true,
+    capacityPizzaUnit: 4,
+  },
+  {
+    id: "combo-dolce",
+    nome: "Combo Dolce",
+    descrizione: "Scegli pizza + dolce. Sconto EUR 1.00 sul totale.",
+    prezzo: 13.9,
+    available: true,
+    capacityPizzaUnit: 1,
+  },
+];
+const EXTRA_PREZZI: Record<string, number> = Object.fromEntries(
+  EXTRA_INGREDIENTI_DEMO.map((extra) => [extra.nome, extra.prezzo])
+);
 const ORARI_PIZZERIA = {
   openingTime: "18:30",
   closingTime: "22:30",
@@ -234,26 +366,17 @@ const PIPELINE_CONSEGNA: StatoOrdine[] = [
   "consegnato",
 ];
 
-const EXTRA_INGREDIENTI = [
-  "Burrata",
-  "Nduja",
-  "Funghi porcini",
-  "Olive taggiasche",
-  "Cipolla caramellata",
-  "Doppia mozzarella",
-];
-
 const MENU_PIZZE: Pizza[] = [
-  { id: "margherita", nome: "Margherita", descrizione: "Classica napoletana", prezzo: 7.5, ingredienti: ["Pomodoro", "Fior di latte", "Basilico"] },
-  { id: "diavola", nome: "Diavola", descrizione: "Piccante al punto giusto", prezzo: 9.5, ingredienti: ["Pomodoro", "Fior di latte", "Salame piccante"] },
-  { id: "quattro-formaggi", nome: "Quattro Formaggi", descrizione: "Cremosa e intensa", prezzo: 10.5, ingredienti: ["Fior di latte", "Gorgonzola", "Fontina", "Grana"] },
-  { id: "capricciosa", nome: "Capricciosa", descrizione: "Ricca e bilanciata", prezzo: 10, ingredienti: ["Pomodoro", "Fior di latte", "Prosciutto cotto", "Funghi", "Carciofi"] },
-  { id: "prosciutto-funghi", nome: "Prosciutto e Funghi", descrizione: "Evergreen da asporto", prezzo: 9.5, ingredienti: ["Pomodoro", "Fior di latte", "Prosciutto cotto", "Funghi"] },
-  { id: "bufalina", nome: "Bufalina", descrizione: "Premium con bufala", prezzo: 11, ingredienti: ["Pomodoro", "Mozzarella di bufala", "Pomodorini", "Basilico"] },
-  { id: "ortolana", nome: "Ortolana", descrizione: "Verdure grigliate", prezzo: 9, ingredienti: ["Pomodoro", "Fior di latte", "Zucchine", "Melanzane", "Peperoni"] },
-  { id: "tonno-cipolla", nome: "Tonno e Cipolla", descrizione: "Saporita e decisa", prezzo: 9.5, ingredienti: ["Pomodoro", "Fior di latte", "Tonno", "Cipolla rossa"] },
-  { id: "salsiccia-friarelli", nome: "Salsiccia e Friarielli", descrizione: "Tradizione campana", prezzo: 11, ingredienti: ["Fior di latte", "Salsiccia", "Friarielli"] },
-  { id: "tartufo", nome: "Tartufo Gourmet", descrizione: "Aroma premium", prezzo: 13.5, ingredienti: ["Crema tartufata", "Fior di latte", "Funghi", "Scaglie di grana"] },
+  { id: "margherita", nome: "Margherita", descrizione: "Classica napoletana", prezzo: 7.5, ingredienti: ["Pomodoro", "Fior di latte", "Basilico"], available: true },
+  { id: "diavola", nome: "Diavola", descrizione: "Piccante al punto giusto", prezzo: 9.5, ingredienti: ["Pomodoro", "Fior di latte", "Salame piccante"], available: true },
+  { id: "quattro-formaggi", nome: "Quattro Formaggi", descrizione: "Cremosa e intensa", prezzo: 10.5, ingredienti: ["Fior di latte", "Gorgonzola", "Fontina", "Grana"], available: true },
+  { id: "capricciosa", nome: "Capricciosa", descrizione: "Ricca e bilanciata", prezzo: 10, ingredienti: ["Pomodoro", "Fior di latte", "Prosciutto cotto", "Funghi", "Carciofi"], available: true },
+  { id: "prosciutto-funghi", nome: "Prosciutto e Funghi", descrizione: "Evergreen da asporto", prezzo: 9.5, ingredienti: ["Pomodoro", "Fior di latte", "Prosciutto cotto", "Funghi"], available: true },
+  { id: "bufalina", nome: "Bufalina", descrizione: "Premium con bufala", prezzo: 11, ingredienti: ["Pomodoro", "Mozzarella di bufala", "Pomodorini", "Basilico"], available: true },
+  { id: "ortolana", nome: "Ortolana", descrizione: "Verdure grigliate", prezzo: 9, ingredienti: ["Pomodoro", "Fior di latte", "Zucchine", "Melanzane", "Peperoni"], available: true },
+  { id: "tonno-cipolla", nome: "Tonno e Cipolla", descrizione: "Saporita e decisa", prezzo: 9.5, ingredienti: ["Pomodoro", "Fior di latte", "Tonno", "Cipolla rossa"], available: true },
+  { id: "salsiccia-friarelli", nome: "Salsiccia e Friarielli", descrizione: "Tradizione campana", prezzo: 11, ingredienti: ["Fior di latte", "Salsiccia", "Friarielli"], available: true },
+  { id: "tartufo", nome: "Tartufo Gourmet", descrizione: "Aroma premium", prezzo: 13.5, ingredienti: ["Crema tartufata", "Fior di latte", "Funghi", "Scaglie di grana"], available: true },
 ];
 
 const CLIENTI_DEMO: Cliente[] = [
@@ -575,10 +698,136 @@ function getTotaleExtra(extra: string[]) {
   return extra.reduce((acc, item) => acc + getExtraPrezzo(item), 0);
 }
 
-function buildRigaCarrelloSignature(row: Pick<RigaCarrello, "pizzaId" | "extra" | "note" | "ingredientiRimossi">) {
+function getRigaPrezzoUnitario(
+  riga: Pick<RigaCarrello, "basePrezzo" | "extra" | "impastoPrezzoExtra" | "comboDettaglio">
+) {
+  if (riga.comboDettaglio) return riga.basePrezzo;
+  return riga.basePrezzo + getTotaleExtra(riga.extra) + (riga.impastoPrezzoExtra ?? 0);
+}
+
+function comboDettaglioSignature(det: ComboDettaglio): string {
+  if (det.kind === "pizza-bibita") {
+    return `pb|${det.pizzaId}|${det.impastoId ?? ""}|${[...det.extra].sort().join(",")}|${det.notePizza.trim()}|${det.bibitaId}`;
+  }
+  if (det.kind === "famiglia") {
+    return `fm|${det.pizze.map((p) => `${p.pizzaId}:${p.note ?? ""}`).join(";")}|${det.bibite.map((b) => b.id).join(",")}`;
+  }
+  return `dc|${det.pizzaId}|${det.impastoId ?? ""}|${[...det.extra].sort().join(",")}|${det.notePizza.trim()}|${det.dolceId}`;
+}
+
+function buildRigaCarrelloSignature(
+  row: Pick<
+    RigaCarrello,
+    "categoria" | "pizzaId" | "extra" | "note" | "ingredientiRimossi" | "impastoId" | "comboDettaglio"
+  >
+) {
   const extra = [...row.extra].sort().join("|");
   const ingredientiRimossi = [...(row.ingredientiRimossi ?? [])].sort().join("|");
-  return [row.pizzaId, extra, ingredientiRimossi, row.note.trim().toLowerCase()].join("::");
+  const comboKey = row.comboDettaglio ? comboDettaglioSignature(row.comboDettaglio) : "";
+  return [
+    row.categoria,
+    row.pizzaId,
+    row.impastoId ?? "",
+    extra,
+    ingredientiRimossi,
+    row.note.trim().toLowerCase(),
+    comboKey,
+  ].join("::");
+}
+
+function comboHaProdottiBaseDisponibili(
+  comboItem: MenuItemBase & { capacityPizzaUnit: number },
+  pizze: Pizza[],
+  bevande: MenuItemBase[],
+  dolci: MenuItemBase[]
+): boolean {
+  if (!comboItem.available) return false;
+  const pOk = pizze.some((p) => p.available);
+  const bOk = bevande.some((b) => b.available);
+  const dOk = dolci.some((d) => d.available);
+  if (comboItem.id === "combo-pizza-bibita") return pOk && bOk;
+  if (comboItem.id === "combo-famiglia") return pOk && bOk;
+  if (comboItem.id === "combo-dolce") return pOk && dOk;
+  return false;
+}
+
+function rigaComponentiDisponibili(
+  riga: RigaCarrello,
+  pizzaById: Map<string, Pizza>,
+  bevandeById: Map<string, MenuItemBase>,
+  dolciById: Map<string, MenuItemBase>,
+  comboById: Map<string, MenuItemBase & { capacityPizzaUnit: number }>,
+  extraByNome: Map<string, ExtraIngredienteConfig>,
+  impastoById: Map<string, ImpastoOption>
+): boolean {
+  const cat = riga.categoria ?? "pizze";
+  if (cat === "combo") {
+    if (!(comboById.get(riga.pizzaId)?.available ?? true)) return false;
+    const d = riga.comboDettaglio;
+    if (!d) return false;
+    if (d.kind === "pizza-bibita") {
+      return (
+        (pizzaById.get(d.pizzaId)?.available ?? false) &&
+        (bevandeById.get(d.bibitaId)?.available ?? false) &&
+        (!d.impastoId || (impastoById.get(d.impastoId)?.available ?? false)) &&
+        d.extra.every((ex) => extraByNome.get(ex)?.available ?? false)
+      );
+    }
+    if (d.kind === "dolce") {
+      return (
+        (pizzaById.get(d.pizzaId)?.available ?? false) &&
+        (dolciById.get(d.dolceId)?.available ?? false) &&
+        (!d.impastoId || (impastoById.get(d.impastoId)?.available ?? false)) &&
+        d.extra.every((ex) => extraByNome.get(ex)?.available ?? false)
+      );
+    }
+    return (
+      d.pizze.every((p) => pizzaById.get(p.pizzaId)?.available ?? false) &&
+      d.bibite.every((b) => bevandeById.get(b.id)?.available ?? false)
+    );
+  }
+  if (cat === "bevande") return bevandeById.get(riga.pizzaId)?.available ?? true;
+  if (cat === "dolci") return dolciById.get(riga.pizzaId)?.available ?? true;
+  if (cat === "pizze") {
+    return (
+      (pizzaById.get(riga.pizzaId)?.available ?? false) &&
+      (!riga.impastoId || (impastoById.get(riga.impastoId)?.available ?? false)) &&
+      riga.extra.every((ex) => extraByNome.get(ex)?.available ?? false)
+    );
+  }
+  return pizzaById.get(riga.pizzaId)?.available ?? true;
+}
+
+function carrelloRigaExtraNonDisponibili(
+  riga: RigaCarrello,
+  extraByNome: Map<string, ExtraIngredienteConfig>
+): string[] {
+  if (riga.comboDettaglio?.kind === "pizza-bibita" || riga.comboDettaglio?.kind === "dolce") {
+    return riga.comboDettaglio.extra.filter((ex) => !(extraByNome.get(ex)?.available ?? true));
+  }
+  return riga.extra.filter((ex) => !(extraByNome.get(ex)?.available ?? true));
+}
+
+function carrelloRigaImpastoNonDisponibile(
+  riga: RigaCarrello,
+  impastoById: Map<string, ImpastoOption>
+): boolean {
+  const impId =
+    riga.comboDettaglio?.kind === "pizza-bibita" || riga.comboDettaglio?.kind === "dolce"
+      ? riga.comboDettaglio.impastoId
+      : riga.impastoId;
+  if (!impId) return false;
+  return !(impastoById.get(impId)?.available ?? true);
+}
+
+function formatBibiteFamigliaElenco(bibite: Array<{ id: string; nome: string }>) {
+  const counts = new Map<string, { nome: string; n: number }>();
+  for (const b of bibite) {
+    const cur = counts.get(b.id) ?? { nome: b.nome, n: 0 };
+    cur.n += 1;
+    counts.set(b.id, cur);
+  }
+  return [...counts.values()].map((c) => (c.n > 1 ? `${c.n}x ${c.nome}` : c.nome)).join(", ");
 }
 
 function mergeCarrelloRighe(righe: RigaCarrello[]): RigaCarrello[] {
@@ -738,7 +987,24 @@ function generaSlotOrari() {
 }
 
 function contaPizzeOrdine(righe: RigaCarrello[]): number {
-  return righe.reduce((acc, r) => acc + r.quantita, 0);
+  return righe.reduce((acc, r) => {
+    const categoria = r.categoria ?? "pizze";
+    if (categoria === "bevande" || categoria === "dolci") return acc;
+    return acc + (r.capacityPizzaUnit ?? 1) * r.quantita;
+  }, 0);
+}
+
+function getCategoriaLabel(categoria?: MenuCategoria) {
+  switch (categoria ?? "pizze") {
+    case "bevande":
+      return "bevanda";
+    case "dolci":
+      return "dolce";
+    case "combo":
+      return "combo";
+    default:
+      return "pizza";
+  }
 }
 
 function appendEventoTimeline(ordine: Ordine, messaggio: string): Ordine {
@@ -777,6 +1043,50 @@ function messaggioNotificaStatoOrdine(ordineId: string, stato: StatoOrdine): str
   }
 }
 
+function DettaglioTestoComboRiga({ riga }: { riga: RigaCarrello }) {
+  const d = riga.comboDettaglio;
+  if (!d) return null;
+  if (d.kind === "pizza-bibita") {
+    return (
+      <div className="ml-2 space-y-0.5 text-[#6d4331]">
+        <p>
+          Pizza: {d.pizzaNome}
+          {d.impastoNome ? ` · Impasto: ${d.impastoNome}` : ""}
+        </p>
+        {d.extra.length > 0 ? <p>Extra: {d.extra.join(", ")}</p> : null}
+        {d.notePizza.trim() ? <p>Note pizza: {d.notePizza}</p> : null}
+        <p>Bibita: {d.bibitaNome}</p>
+        <p>Sconto combo: - {formatEuro(d.scontoCombo)}</p>
+      </div>
+    );
+  }
+  if (d.kind === "famiglia") {
+    return (
+      <div className="ml-2 space-y-0.5 text-[#6d4331]">
+        {d.pizze.map((p, i) => (
+          <p key={`${riga.id}-fp-${i}`}>
+            Pizza {i + 1}: {p.nome}
+            {p.note ? ` (${p.note})` : ""}
+          </p>
+        ))}
+        <p>Bibite: {formatBibiteFamigliaElenco(d.bibite)}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="ml-2 space-y-0.5 text-[#6d4331]">
+      <p>
+        Pizza: {d.pizzaNome}
+        {d.impastoNome ? ` · Impasto: ${d.impastoNome}` : ""}
+      </p>
+      {d.extra.length > 0 ? <p>Extra: {d.extra.join(", ")}</p> : null}
+      {d.notePizza.trim() ? <p>Note pizza: {d.notePizza}</p> : null}
+      <p>Dolce: {d.dolceNome}</p>
+      <p>Sconto combo: - {formatEuro(d.scontoCombo)}</p>
+    </div>
+  );
+}
+
 function AdminDettaglioOrdineBlock({
   ordine,
   expanded,
@@ -802,14 +1112,27 @@ function AdminDettaglioOrdineBlock({
           <div key={riga.id}>
             <p className="font-semibold">
               {riga.quantita}x {riga.nome}
+              <span className="ml-1 text-[10px] uppercase text-[#9a715c]">({getCategoriaLabel(riga.categoria)})</span>
             </p>
-            {riga.extra.length > 0 ? (
-              <p className="ml-2 text-[#6d4331]">Extra: {riga.extra.join(", ")}</p>
-            ) : null}
-            {riga.ingredientiRimossi && riga.ingredientiRimossi.length > 0 ? (
-              <p className="ml-2 text-[#6d4331]">Senza: {riga.ingredientiRimossi.join(", ")}</p>
-            ) : null}
-            {riga.note.trim() ? <p className="ml-2 text-[#6d4331]">Note: {riga.note}</p> : null}
+            {riga.categoria === "combo" && riga.comboDettaglio ? (
+              <DettaglioTestoComboRiga riga={riga} />
+            ) : (
+              <>
+                {riga.impastoNome ? (
+                  <p className="ml-2 text-[#6d4331]">
+                    Impasto: {riga.impastoNome}
+                    {riga.impastoPrezzoExtra ? ` (+${formatEuro(riga.impastoPrezzoExtra)})` : ""}
+                  </p>
+                ) : null}
+                {riga.extra.length > 0 ? (
+                  <p className="ml-2 text-[#6d4331]">Extra: {riga.extra.join(", ")}</p>
+                ) : null}
+                {riga.ingredientiRimossi && riga.ingredientiRimossi.length > 0 ? (
+                  <p className="ml-2 text-[#6d4331]">Senza: {riga.ingredientiRimossi.join(", ")}</p>
+                ) : null}
+                {riga.note.trim() ? <p className="ml-2 text-[#6d4331]">Note: {riga.note}</p> : null}
+              </>
+            )}
           </div>
         ))}
       </div>
@@ -974,6 +1297,15 @@ export default function Home() {
   );
   const [view, setView] = useState<AppView>("cliente");
   const [tabCliente, setTabCliente] = useState<ClienteTab>("home");
+  const [menuCategoriaCliente, setMenuCategoriaCliente] = useState<MenuCategoria>("pizze");
+  const [menuPizze, setMenuPizze] = useState<Pizza[]>(MENU_PIZZE);
+  const [extraIngredienti, setExtraIngredienti] = useState<ExtraIngredienteConfig[]>(
+    EXTRA_INGREDIENTI_DEMO
+  );
+  const [impasti, setImpasti] = useState<ImpastoOption[]>(IMPASTI_DEMO);
+  const [bevande, setBevande] = useState<MenuItemBase[]>(BEVANDE_DEMO);
+  const [dolci, setDolci] = useState<MenuItemBase[]>(DOLCI_DEMO);
+  const [combo, setCombo] = useState<Array<MenuItemBase & { capacityPizzaUnit: number }>>(COMBO_DEMO);
   const [carrello, setCarrello] = useState<RigaCarrello[]>([]);
   const [ordini, setOrdini] = useState<Ordine[]>(() => buildOrdiniDemoIniziali());
   const [clienti, setClienti] = useState<Cliente[]>(CLIENTI_DEMO);
@@ -981,6 +1313,7 @@ export default function Home() {
   const [profiloCliente, setProfiloCliente] =
     useState<ProfiloClienteDemo>(PROFILO_CLIENTE_DEMO);
   const [pizzaSelezionata, setPizzaSelezionata] = useState<Pizza | null>(null);
+  const [impastoSelezionatoId, setImpastoSelezionatoId] = useState("classico");
   const [extraSelezionati, setExtraSelezionati] = useState<string[]>([]);
   const [notePizza, setNotePizza] = useState("");
   const [tipoOrdine, setTipoOrdine] = useState<TipoOrdine>("ritiro");
@@ -1039,6 +1372,7 @@ export default function Home() {
   const [manualCustomerPhone, setManualCustomerPhone] = useState("");
   const [manualCustomerEmail, setManualCustomerEmail] = useState("");
   const [manualTipoOrdine, setManualTipoOrdine] = useState<TipoOrdine>("ritiro");
+  const [manualCategoria, setManualCategoria] = useState<MenuCategoria>("pizze");
   const [manualAddress, setManualAddress] = useState("");
   const [manualCitofono, setManualCitofono] = useState("");
   const [manualDeliveryNotes, setManualDeliveryNotes] = useState("");
@@ -1061,11 +1395,30 @@ export default function Home() {
   const [adminArchiveNotice, setAdminArchiveNotice] = useState("");
   const [showFineServizioModal, setShowFineServizioModal] = useState(false);
   const [archiveResetConfirmInput, setArchiveResetConfirmInput] = useState("");
+  const [soldOutReasonDrafts, setSoldOutReasonDrafts] = useState<Record<string, string>>({});
+  const [comboConfigModalCtx, setComboConfigModalCtx] = useState<null | { ctx: "cliente" | "admin"; comboTemplateId: string }>(
+    null
+  );
+  const [comboModalError, setComboModalError] = useState("");
+  const [comboPbPizzaId, setComboPbPizzaId] = useState("");
+  const [comboPbImpastoId, setComboPbImpastoId] = useState("classico");
+  const [comboPbExtra, setComboPbExtra] = useState<string[]>([]);
+  const [comboPbNote, setComboPbNote] = useState("");
+  const [comboPbBibitaId, setComboPbBibitaId] = useState("");
+  const [comboFamPizze, setComboFamPizze] = useState<[string, string, string, string]>(["", "", "", ""]);
+  const [comboFamNotePizze, setComboFamNotePizze] = useState<[string, string, string, string]>(["", "", "", ""]);
+  const [comboFamBibita1, setComboFamBibita1] = useState("");
+  const [comboFamBibita2, setComboFamBibita2] = useState("");
+  const [comboDolPizzaId, setComboDolPizzaId] = useState("");
+  const [comboDolImpastoId, setComboDolImpastoId] = useState("classico");
+  const [comboDolExtra, setComboDolExtra] = useState<string[]>([]);
+  const [comboDolNote, setComboDolNote] = useState("");
+  const [comboDolDolceId, setComboDolDolceId] = useState("");
 
   const totaleCarrello = useMemo(
     () =>
       carrello.reduce(
-        (acc, item) => acc + (item.basePrezzo + getTotaleExtra(item.extra)) * item.quantita,
+        (acc, item) => acc + getRigaPrezzoUnitario(item) * item.quantita,
         0
       ),
     [carrello]
@@ -1075,8 +1428,15 @@ export default function Home() {
     [carrello]
   );
   const pizzeNelCarrello = useMemo(
-    () => carrello.reduce((acc, item) => acc + item.quantita, 0),
+    () => contaPizzeOrdine(carrello),
     [carrello]
+  );
+  const carrelloNavTitle = useMemo(
+    () =>
+      numeroProdottiCarrello > 0
+        ? `${numeroProdottiCarrello} articol${numeroProdottiCarrello === 1 ? "o" : "i"} nel carrello · ${pizzeNelCarrello} pizz${pizzeNelCarrello === 1 ? "a" : "e"} per capacità slot`
+        : "Carrello",
+    [numeroProdottiCarrello, pizzeNelCarrello]
   );
 
   const indirizzoSalvatoSelezionato = useMemo(
@@ -1406,19 +1766,68 @@ export default function Home() {
     [orarioScelto, slotCapacity]
   );
   const clienteOrdineHuge = pizzeNelCarrello >= ORDER_SIZE_THRESHOLDS.hugeOrderMinPizzas;
+  const pizzeEsaurite = useMemo(() => menuPizze.filter((pizza) => !pizza.available), [menuPizze]);
+  const extraEsauriti = useMemo(
+    () => extraIngredienti.filter((extra) => !extra.available),
+    [extraIngredienti]
+  );
+  const bevandeEsaurite = useMemo(() => bevande.filter((item) => !item.available), [bevande]);
+  const dolciEsauriti = useMemo(() => dolci.filter((item) => !item.available), [dolci]);
+  const comboEsaurite = useMemo(() => combo.filter((item) => !item.available), [combo]);
+  const impastiEsauriti = useMemo(() => impasti.filter((item) => !item.available), [impasti]);
+  const pizzaById = useMemo(
+    () => new Map(menuPizze.map((pizza) => [pizza.id, pizza])),
+    [menuPizze]
+  );
+  const extraByNome = useMemo(
+    () => new Map(extraIngredienti.map((extra) => [extra.nome, extra])),
+    [extraIngredienti]
+  );
+  const impastoById = useMemo(() => new Map(impasti.map((impasto) => [impasto.id, impasto])), [impasti]);
+  const bevandeById = useMemo(() => new Map(bevande.map((item) => [item.id, item])), [bevande]);
+  const dolciById = useMemo(() => new Map(dolci.map((item) => [item.id, item])), [dolci]);
+  const comboById = useMemo(() => new Map(combo.map((item) => [item.id, item])), [combo]);
+  const impastoSelezionato = useMemo(
+    () => impasti.find((impasto) => impasto.id === impastoSelezionatoId) ?? impasti[0] ?? null,
+    [impasti, impastoSelezionatoId]
+  );
+  const prodottiNonDisponibiliNelCarrello = useMemo(
+    () =>
+      carrello.some(
+        (riga) =>
+          !rigaComponentiDisponibili(
+            riga,
+            pizzaById,
+            bevandeById,
+            dolciById,
+            comboById,
+            extraByNome,
+            impastoById
+          )
+      ),
+    [carrello, pizzaById, bevandeById, dolciById, comboById, extraByNome, impastoById]
+  );
+  const extraNonDisponibiliNelCarrello = useMemo(
+    () => carrello.some((riga) => carrelloRigaExtraNonDisponibili(riga, extraByNome).length > 0),
+    [carrello, extraByNome]
+  );
+  const impastiNonDisponibiliNelCarrello = useMemo(
+    () => carrello.some((riga) => carrelloRigaImpastoNonDisponibile(riga, impastoById)),
+    [carrello, impastoById]
+  );
   const canShowPaymentSection =
     !clienteOrdineHuge &&
     (tipoOrdine === "ritiro"
       ? Boolean(orarioScelto && selectedSlotInfo?.selezionabile)
       : Boolean(indirizzoConsegnaSelezionato && orarioScelto && selectedSlotInfo?.selezionabile));
   const manualPizzaCount = useMemo(
-    () => manualRows.reduce((acc, item) => acc + item.quantita, 0),
+    () => contaPizzeOrdine(manualRows),
     [manualRows]
   );
   const manualSubtotal = useMemo(
     () =>
       manualRows.reduce(
-        (acc, item) => acc + (item.basePrezzo + getTotaleExtra(item.extra)) * item.quantita,
+        (acc, item) => acc + getRigaPrezzoUnitario(item) * item.quantita,
         0
       ),
     [manualRows]
@@ -1436,6 +1845,22 @@ export default function Home() {
     () => manualSlotCapacity.find((s) => s.slot === manualOrarioScelto),
     [manualOrarioScelto, manualSlotCapacity]
   );
+  const manualRowsNonDisponibili = useMemo(
+    () =>
+      manualRows.some(
+        (row) =>
+          !rigaComponentiDisponibili(
+            row,
+            pizzaById,
+            bevandeById,
+            dolciById,
+            comboById,
+            extraByNome,
+            impastoById
+          )
+      ),
+    [manualRows, pizzaById, bevandeById, dolciById, comboById, extraByNome, impastoById]
+  );
   const manualPhoneNormalized = useMemo(
     () => normalizzaTelefono(manualCustomerPhone),
     [manualCustomerPhone]
@@ -1448,9 +1873,15 @@ export default function Home() {
     manualTipoOrdine === "ritiro"
       ? PAYMENT_METHODS_RITIRO.filter((m) => m.id === "cash_at_pickup" || m.id === "card_at_pickup")
       : PAYMENT_METHODS_CONSEGNA.filter((m) => m.id === "cash_on_delivery" || m.id === "card_on_delivery");
+  const manualCatalogo = useMemo(() => {
+    if (manualCategoria === "bevande") return bevande;
+    if (manualCategoria === "dolci") return dolci;
+    if (manualCategoria === "combo") return combo;
+    return menuPizze;
+  }, [bevande, combo, dolci, manualCategoria, menuPizze]);
   const manualPizzaSelezionata = useMemo(
-    () => MENU_PIZZE.find((pizza) => pizza.id === manualSelectedPizzaId) ?? null,
-    [manualSelectedPizzaId]
+    () => manualCatalogo.find((pizza) => pizza.id === manualSelectedPizzaId) ?? null,
+    [manualCatalogo, manualSelectedPizzaId]
   );
   const calcolataDeliveryCapacityDraft =
     slotCapacityDraft.ridersAvailable * slotCapacityDraft.deliveriesPerRiderPerSlot;
@@ -1495,27 +1926,27 @@ export default function Home() {
       ),
       1
     );
-    return MENU_PIZZE.map((pizza) => {
+    return menuPizze.map((pizza) => {
       const ordiniPizza = ordini.flatMap((ordine) =>
         ordine.righe.filter((riga) => riga.pizzaId === pizza.id)
       );
       const quantitaVenduta = ordiniPizza.reduce((acc, riga) => acc + riga.quantita, 0);
       const fatturato = ordiniPizza.reduce(
-        (acc, riga) => acc + (riga.basePrezzo + getTotaleExtra(riga.extra)) * riga.quantita,
+        (acc, riga) => acc + getRigaPrezzoUnitario(riga) * riga.quantita,
         0
       );
       const percentuale = (quantitaVenduta / totalePizze) * 100;
       const badge = percentuale >= 18 ? "TOP" : percentuale >= 8 ? "MEDIA" : "BASSA";
       return { pizza, quantitaVenduta, fatturato, percentuale, badge };
     }).sort((a, b) => b.quantitaVenduta - a.quantitaVenduta);
-  }, [ordini]);
+  }, [menuPizze, ordini]);
   const ingredientiRealiSistema = useMemo(() => {
-    const ingredientiMenu = MENU_PIZZE.flatMap((pizza) => pizza.ingredienti);
-    return Array.from(new Set([...ingredientiMenu, ...EXTRA_INGREDIENTI]));
-  }, []);
+    const ingredientiMenu = menuPizze.flatMap((pizza) => pizza.ingredienti);
+    return Array.from(new Set([...ingredientiMenu, ...extraIngredienti.map((extra) => extra.nome)]));
+  }, [extraIngredienti, menuPizze]);
   const ingredientUsageStats = useMemo(() => {
     const ingredientiSet = new Set(ingredientiRealiSistema);
-    const pizzaById = new Map(MENU_PIZZE.map((pizza) => [pizza.id, pizza]));
+    const pizzaByIdMap = new Map(menuPizze.map((pizza) => [pizza.id, pizza]));
     const usage = new Map<
       string,
       { usi: number; extraUsi: number; ricavoExtra: number; rimossi: number; isExtra: boolean }
@@ -1526,12 +1957,12 @@ export default function Home() {
         extraUsi: 0,
         ricavoExtra: 0,
         rimossi: 0,
-        isExtra: EXTRA_INGREDIENTI.includes(ingrediente),
+        isExtra: extraByNome.has(ingrediente),
       })
     );
     ordini.forEach((ordine) => {
       ordine.righe.forEach((riga) => {
-        const pizza = pizzaById.get(riga.pizzaId);
+        const pizza = pizzaByIdMap.get(riga.pizzaId);
         pizza?.ingredienti.forEach((ingrediente) => {
           if (!ingredientiSet.has(ingrediente)) return;
           const item = usage.get(ingrediente);
@@ -1555,7 +1986,7 @@ export default function Home() {
       });
     });
     return [...usage.entries()].map(([ingrediente, values]) => ({ ingrediente, ...values }));
-  }, [ingredientiRealiSistema, ordini]);
+  }, [extraByNome, ingredientiRealiSistema, menuPizze, ordini]);
   const extraStats = useMemo(
     () =>
       ingredientUsageStats
@@ -1659,6 +2090,125 @@ export default function Home() {
     [customerAnalytics]
   );
 
+  function toggleDisponibilitaPizza(pizzaId: string, available: boolean) {
+    setMenuPizze((prev) =>
+      prev.map((pizza) => {
+        if (pizza.id !== pizzaId) return pizza;
+        const reason = soldOutReasonDrafts[`pizza-${pizzaId}`]?.trim();
+        return {
+          ...pizza,
+          available,
+          soldOutReason: available ? undefined : reason || "Ingrediente non disponibile",
+        };
+      })
+    );
+  }
+
+  function toggleDisponibilitaExtra(extraNome: string, available: boolean) {
+    if (!available) {
+      setExtraSelezionati((prev) => prev.filter((extra) => extra !== extraNome));
+      setManualExtraSelezionati((prev) => prev.filter((extra) => extra !== extraNome));
+      setCarrello((prev) => {
+        let changed = false;
+        const next = prev.map((riga) => {
+          if (!riga.extra.includes(extraNome)) return riga;
+          changed = true;
+          return { ...riga, extra: riga.extra.filter((extra) => extra !== extraNome) };
+        });
+        if (changed) {
+          setMenuAddToast("Extra non più disponibile: rimosso automaticamente dal carrello.");
+        }
+        return changed ? next : prev;
+      });
+      setManualRows((prev) =>
+        prev.map((row) =>
+          row.extra.includes(extraNome)
+            ? { ...row, extra: row.extra.filter((extra) => extra !== extraNome) }
+            : row
+        )
+      );
+    }
+    setExtraIngredienti((prev) =>
+      prev.map((extra) => {
+        if (extra.nome !== extraNome) return extra;
+        const reason = soldOutReasonDrafts[`extra-${extraNome}`]?.trim();
+        return {
+          ...extra,
+          available,
+          soldOutReason: available ? undefined : reason || "Ingrediente non disponibile",
+        };
+      })
+    );
+  }
+
+  function toggleDisponibilitaBevanda(itemId: string, available: boolean) {
+    setBevande((prev) =>
+      prev.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              available,
+              soldOutReason: available
+                ? undefined
+                : soldOutReasonDrafts[`bevanda-${itemId}`]?.trim() || "Prodotto non disponibile",
+            }
+          : item
+      )
+    );
+  }
+
+  function toggleDisponibilitaDolce(itemId: string, available: boolean) {
+    setDolci((prev) =>
+      prev.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              available,
+              soldOutReason: available
+                ? undefined
+                : soldOutReasonDrafts[`dolce-${itemId}`]?.trim() || "Prodotto non disponibile",
+            }
+          : item
+      )
+    );
+  }
+
+  function toggleDisponibilitaCombo(itemId: string, available: boolean) {
+    setCombo((prev) =>
+      prev.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              available,
+              soldOutReason: available
+                ? undefined
+                : soldOutReasonDrafts[`combo-${itemId}`]?.trim() || "Prodotto non disponibile",
+            }
+          : item
+      )
+    );
+  }
+
+  function toggleDisponibilitaImpasto(impastoId: string, available: boolean) {
+    if (!available && impastoId === "classico") return;
+    setImpasti((prev) =>
+      prev.map((impasto) =>
+        impasto.id === impastoId
+          ? {
+              ...impasto,
+              available,
+              soldOutReason: available
+                ? undefined
+                : soldOutReasonDrafts[`impasto-${impastoId}`]?.trim() || "Impasto non disponibile",
+            }
+          : impasto
+      )
+    );
+    if (!available && impastoSelezionatoId === impastoId) {
+      setImpastoSelezionatoId("classico");
+    }
+  }
+
   function simulaPagamentoOnline() {
     setOnlinePaymentSimulated(true);
     setSimulatedPaidAt(new Date().toISOString());
@@ -1666,12 +2216,26 @@ export default function Home() {
 
   function aggiungiPizza() {
     if (!pizzaSelezionata) return;
+    const pizzaAggiornata = pizzaById.get(pizzaSelezionata.id);
+    if (pizzaAggiornata && !pizzaAggiornata.available) {
+      setMenuAddToast("Questa pizza è temporaneamente esaurita.");
+      return;
+    }
+    if (!impastoSelezionato?.available) {
+      setMenuAddToast("L'impasto selezionato è temporaneamente esaurito.");
+      return;
+    }
     const nomePizza = pizzaSelezionata.nome;
     const noteTrim = notePizza.trim();
-    const candidate: Pick<RigaCarrello, "pizzaId" | "extra" | "note" | "ingredientiRimossi"> = {
+    const candidate: Pick<
+      RigaCarrello,
+      "categoria" | "pizzaId" | "extra" | "note" | "ingredientiRimossi" | "impastoId"
+    > = {
+      categoria: "pizze",
       pizzaId: pizzaSelezionata.id,
       extra: [...extraSelezionati],
       note: noteTrim,
+      impastoId: impastoSelezionatoId,
       ingredientiRimossi: undefined,
     };
     const sig = buildRigaCarrelloSignature(candidate);
@@ -1682,19 +2246,344 @@ export default function Home() {
       }
       const nuovaRiga: RigaCarrello = {
         id: crypto.randomUUID(),
+        categoria: "pizze",
         pizzaId: pizzaSelezionata.id,
         nome: pizzaSelezionata.nome,
         basePrezzo: pizzaSelezionata.prezzo,
         extra: [...extraSelezionati],
         note: noteTrim,
+        impastoId: impastoSelezionato?.id,
+        impastoNome: impastoSelezionato?.nome,
+        impastoPrezzoExtra: impastoSelezionato?.prezzoExtra ?? 0,
+        capacityPizzaUnit: 1,
         quantita: 1,
       };
       return [...prev, nuovaRiga];
     });
     setPizzaSelezionata(null);
+    setImpastoSelezionatoId("classico");
     setExtraSelezionati([]);
     setNotePizza("");
     setMenuAddToast(`${nomePizza} aggiunta al carrello`);
+  }
+
+  function aggiungiProdottoSempliceAlCarrello(
+    categoria: Exclude<MenuCategoria, "pizze">,
+    item: MenuItemBase,
+    capacityPizzaUnit = 0
+  ) {
+    if (!item.available) {
+      setMenuAddToast("Questo prodotto è temporaneamente esaurito.");
+      return;
+    }
+    const sig = buildRigaCarrelloSignature({
+      categoria,
+      pizzaId: item.id,
+      extra: [],
+      note: "",
+      impastoId: "",
+      ingredientiRimossi: undefined,
+    });
+    setCarrello((prev) => {
+      const idx = prev.findIndex((r) => buildRigaCarrelloSignature(r) === sig);
+      if (idx !== -1) return prev.map((r, i) => (i === idx ? { ...r, quantita: r.quantita + 1 } : r));
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          categoria,
+          pizzaId: item.id,
+          nome: item.nome,
+          basePrezzo: item.prezzo,
+          extra: [],
+          note: "",
+          quantita: 1,
+          capacityPizzaUnit,
+        },
+      ];
+    });
+    setMenuAddToast(`${item.nome} aggiunto al carrello`);
+  }
+
+  function chiudiComboConfigModal() {
+    setComboConfigModalCtx(null);
+    setComboModalError("");
+  }
+
+  function inizializzaComboModalDraft(templateId: string) {
+    setComboModalError("");
+    const fp = menuPizze.find((p) => p.available)?.id ?? "";
+    const fb = bevande.find((b) => b.available)?.id ?? "";
+    const fd = dolci.find((d) => d.available)?.id ?? "";
+    if (templateId === "combo-pizza-bibita") {
+      setComboPbPizzaId(fp);
+      setComboPbImpastoId("classico");
+      setComboPbExtra([]);
+      setComboPbNote("");
+      setComboPbBibitaId(fb);
+    } else if (templateId === "combo-famiglia") {
+      setComboFamPizze([fp, fp, fp, fp]);
+      setComboFamNotePizze(["", "", "", ""]);
+      setComboFamBibita1(fb);
+      setComboFamBibita2(fb);
+    } else {
+      setComboDolPizzaId(fp);
+      setComboDolImpastoId("classico");
+      setComboDolExtra([]);
+      setComboDolNote("");
+      setComboDolDolceId(fd);
+    }
+  }
+
+  function apriConfiguratoreCombo(ctx: "cliente" | "admin", templateId: string) {
+    const tpl = combo.find((c) => c.id === templateId);
+    if (!tpl?.available) {
+      if (ctx === "cliente") setMenuAddToast(CLIENTE_COPY_PRODOTTO_ESAURITO);
+      else setManualOrderNotice("Questa combo non è disponibile.");
+      return;
+    }
+    if (!comboHaProdottiBaseDisponibili(tpl, menuPizze, bevande, dolci)) {
+      const msg = "Combo temporaneamente non disponibile.";
+      if (ctx === "cliente") setMenuAddToast(msg);
+      else setManualOrderNotice(msg);
+      return;
+    }
+    inizializzaComboModalDraft(templateId);
+    setComboConfigModalCtx({ ctx, comboTemplateId: templateId });
+  }
+
+  function confermaComboConfigModal() {
+    setComboModalError("");
+    if (!comboConfigModalCtx) return;
+    const tpl = combo.find((c) => c.id === comboConfigModalCtx.comboTemplateId);
+    if (!tpl) return;
+    const ctx = comboConfigModalCtx.ctx;
+    const qty = ctx === "admin" ? manualPizzaQty : 1;
+
+    if (tpl.id === "combo-pizza-bibita") {
+      if (!comboPbPizzaId) {
+        setComboModalError("Scegli una pizza");
+        return;
+      }
+      if (!comboPbBibitaId) {
+        setComboModalError("Scegli una bibita");
+        return;
+      }
+      const pizza = pizzaById.get(comboPbPizzaId);
+      const bib = bevandeById.get(comboPbBibitaId);
+      const imp = impastoById.get(comboPbImpastoId);
+      if (!pizza?.available || !bib?.available) {
+        setComboModalError("Combo temporaneamente non disponibile.");
+        return;
+      }
+      if (!imp?.available) {
+        setComboModalError("Scegli un impasto disponibile.");
+        return;
+      }
+      if (comboPbExtra.some((ex) => !(extraByNome.get(ex)?.available ?? true))) {
+        setComboModalError("Combo temporaneamente non disponibile.");
+        return;
+      }
+      const pizzaSub = pizza.prezzo + getTotaleExtra(comboPbExtra) + (imp.prezzoExtra ?? 0);
+      const tot = pizzaSub + bib.prezzo - COMBO_SCONTO_EUR;
+      const det: ComboDettaglioPizzaBibita = {
+        kind: "pizza-bibita",
+        pizzaId: pizza.id,
+        pizzaNome: pizza.nome,
+        pizzaPrezzoComponente: pizza.prezzo,
+        impastoId: imp.id,
+        impastoNome: imp.nome,
+        impastoPrezzoExtra: imp.prezzoExtra,
+        extra: [...comboPbExtra],
+        notePizza: comboPbNote.trim(),
+        bibitaId: bib.id,
+        bibitaNome: bib.nome,
+        bibitaPrezzo: bib.prezzo,
+        scontoCombo: COMBO_SCONTO_EUR,
+      };
+      const nuovaRiga: RigaCarrello & { adminNote?: string } = {
+        id: crypto.randomUUID(),
+        categoria: "combo",
+        pizzaId: tpl.id,
+        nome: tpl.nome,
+        basePrezzo: tot,
+        extra: [],
+        note: "",
+        quantita: qty,
+        capacityPizzaUnit: tpl.capacityPizzaUnit,
+        comboDettaglio: det,
+        adminNote: ctx === "admin" ? comboPbNote.trim() : undefined,
+      };
+      const sig = buildRigaCarrelloSignature(nuovaRiga);
+      if (ctx === "cliente") {
+        setCarrello((prev) => {
+          const idx = prev.findIndex((r) => buildRigaCarrelloSignature(r) === sig);
+          if (idx !== -1) {
+            return prev.map((r, i) => (i === idx ? { ...r, quantita: r.quantita + qty } : r));
+          }
+          return [...prev, nuovaRiga];
+        });
+        setMenuAddToast(`${tpl.nome} aggiunta al carrello`);
+      } else {
+        setManualRows((prev) => {
+          const existingIndex = prev.findIndex((row) => buildRigaCarrelloSignature(row) === sig);
+          if (existingIndex === -1) return [...prev, { ...nuovaRiga, adminNote: comboPbNote.trim() }];
+          return prev.map((row, index) =>
+            index === existingIndex ? { ...row, quantita: row.quantita + qty } : row
+          );
+        });
+        setManualOrderNotice("");
+      }
+      chiudiComboConfigModal();
+      return;
+    }
+
+    if (tpl.id === "combo-famiglia") {
+      if (comboFamPizze.some((id) => !id)) {
+        setComboModalError("Scegli una pizza");
+        return;
+      }
+      if (!comboFamBibita1 || !comboFamBibita2) {
+        setComboModalError("Scegli una bibita");
+        return;
+      }
+      const pizzeDet = comboFamPizze.map((id, i) => {
+        const p = pizzaById.get(id);
+        return {
+          pizzaId: id,
+          nome: p?.nome ?? id,
+          note: comboFamNotePizze[i]?.trim() || undefined,
+        };
+      });
+      if (pizzeDet.some((p) => !(pizzaById.get(p.pizzaId)?.available ?? false))) {
+        setComboModalError("Combo temporaneamente non disponibile.");
+        return;
+      }
+      const b1 = bevandeById.get(comboFamBibita1);
+      const b2 = bevandeById.get(comboFamBibita2);
+      if (!b1?.available || !b2?.available) {
+        setComboModalError("Combo temporaneamente non disponibile.");
+        return;
+      }
+      const det: ComboDettaglioFamiglia = {
+        kind: "famiglia",
+        pizze: pizzeDet,
+        bibite: [
+          { id: b1.id, nome: b1.nome },
+          { id: b2.id, nome: b2.nome },
+        ],
+        prezzoFisso: COMBO_FAMIGLIA_PREZZO_FISSO,
+      };
+      const nuovaRiga: RigaCarrello & { adminNote?: string } = {
+        id: crypto.randomUUID(),
+        categoria: "combo",
+        pizzaId: tpl.id,
+        nome: tpl.nome,
+        basePrezzo: COMBO_FAMIGLIA_PREZZO_FISSO,
+        extra: [],
+        note: "",
+        quantita: qty,
+        capacityPizzaUnit: tpl.capacityPizzaUnit,
+        comboDettaglio: det,
+      };
+      const sig = buildRigaCarrelloSignature(nuovaRiga);
+      if (ctx === "cliente") {
+        setCarrello((prev) => {
+          const idx = prev.findIndex((r) => buildRigaCarrelloSignature(r) === sig);
+          if (idx !== -1) {
+            return prev.map((r, i) => (i === idx ? { ...r, quantita: r.quantita + qty } : r));
+          }
+          return [...prev, nuovaRiga];
+        });
+        setMenuAddToast(`${tpl.nome} aggiunta al carrello`);
+      } else {
+        setManualRows((prev) => {
+          const existingIndex = prev.findIndex((row) => buildRigaCarrelloSignature(row) === sig);
+          if (existingIndex === -1) return [...prev, { ...nuovaRiga, adminNote: "" }];
+          return prev.map((row, index) =>
+            index === existingIndex ? { ...row, quantita: row.quantita + qty } : row
+          );
+        });
+        setManualOrderNotice("");
+      }
+      chiudiComboConfigModal();
+      return;
+    }
+
+    if (!comboDolPizzaId) {
+      setComboModalError("Scegli una pizza");
+      return;
+    }
+    if (!comboDolDolceId) {
+      setComboModalError("Scegli un dolce");
+      return;
+    }
+    const pizza = pizzaById.get(comboDolPizzaId);
+    const dol = dolciById.get(comboDolDolceId);
+    const imp = impastoById.get(comboDolImpastoId);
+    if (!pizza?.available || !dol?.available) {
+      setComboModalError("Combo temporaneamente non disponibile.");
+      return;
+    }
+    if (!imp?.available) {
+      setComboModalError("Scegli un impasto disponibile.");
+      return;
+    }
+    if (comboDolExtra.some((ex) => !(extraByNome.get(ex)?.available ?? true))) {
+      setComboModalError("Combo temporaneamente non disponibile.");
+      return;
+    }
+    const pizzaSub = pizza.prezzo + getTotaleExtra(comboDolExtra) + (imp.prezzoExtra ?? 0);
+    const tot = pizzaSub + dol.prezzo - COMBO_SCONTO_EUR;
+    const det: ComboDettaglioDolce = {
+      kind: "dolce",
+      pizzaId: pizza.id,
+      pizzaNome: pizza.nome,
+      pizzaPrezzoComponente: pizza.prezzo,
+      impastoId: imp.id,
+      impastoNome: imp.nome,
+      impastoPrezzoExtra: imp.prezzoExtra,
+      extra: [...comboDolExtra],
+      notePizza: comboDolNote.trim(),
+      dolceId: dol.id,
+      dolceNome: dol.nome,
+      dolcePrezzo: dol.prezzo,
+      scontoCombo: COMBO_SCONTO_EUR,
+    };
+    const nuovaRiga: RigaCarrello & { adminNote?: string } = {
+      id: crypto.randomUUID(),
+      categoria: "combo",
+      pizzaId: tpl.id,
+      nome: tpl.nome,
+      basePrezzo: tot,
+      extra: [],
+      note: "",
+      quantita: qty,
+      capacityPizzaUnit: tpl.capacityPizzaUnit,
+      comboDettaglio: det,
+      adminNote: ctx === "admin" ? comboDolNote.trim() : undefined,
+    };
+    const sig = buildRigaCarrelloSignature(nuovaRiga);
+    if (ctx === "cliente") {
+      setCarrello((prev) => {
+        const idx = prev.findIndex((r) => buildRigaCarrelloSignature(r) === sig);
+        if (idx !== -1) {
+          return prev.map((r, i) => (i === idx ? { ...r, quantita: r.quantita + qty } : r));
+        }
+        return [...prev, nuovaRiga];
+      });
+      setMenuAddToast(`${tpl.nome} aggiunta al carrello`);
+    } else {
+      setManualRows((prev) => {
+        const existingIndex = prev.findIndex((row) => buildRigaCarrelloSignature(row) === sig);
+        if (existingIndex === -1) return [...prev, { ...nuovaRiga, adminNote: comboDolNote.trim() }];
+        return prev.map((row, index) =>
+          index === existingIndex ? { ...row, quantita: row.quantita + qty } : row
+        );
+      });
+      setManualOrderNotice("");
+    }
+    chiudiComboConfigModal();
   }
 
   function incrementQuantitaCarrello(rigaId: string) {
@@ -1930,6 +2819,7 @@ export default function Home() {
     if (!carrello.length) return;
     if (consegnaInvalida) return;
     if (onlinePaymentPending) return;
+    if (prodottiNonDisponibiliNelCarrello || extraNonDisponibiliNelCarrello || impastiNonDisponibiliNelCarrello) return;
     const createdAtIso = new Date().toISOString();
     const nuovoOrdine: Ordine = {
       id: `PF-${2000 + ordini.length + 1}`,
@@ -2036,7 +2926,7 @@ export default function Home() {
 
   function caricaSavedOrder(savedOrder: SavedOrder) {
     const nuoveRighe: RigaCarrello[] = savedOrder.prodotti.map((item) => {
-      const pizza = MENU_PIZZE.find((p) => p.id === item.pizzaId);
+      const pizza = menuPizze.find((p) => p.id === item.pizzaId);
       return {
         id: crypto.randomUUID(),
         pizzaId: item.pizzaId,
@@ -2133,21 +3023,40 @@ export default function Home() {
     setShowSavePreferredForm(false);
   }
 
-  function buildManualRowSignature(row: Pick<RigaCarrello, "pizzaId" | "extra" | "note" | "ingredientiRimossi">) {
+  function buildManualRowSignature(
+    row: Pick<RigaCarrello, "categoria" | "pizzaId" | "extra" | "note" | "ingredientiRimossi" | "impastoId">
+  ) {
     return buildRigaCarrelloSignature(row);
   }
 
   function aggiungiPizzaOrdineManuale() {
+    if (manualCategoria === "combo") {
+      setManualOrderNotice('Seleziona la combo e usa «Configura combo» per aggiungerla.');
+      return;
+    }
     const pizza = manualPizzaSelezionata;
     if (!pizza || manualPizzaQty < 1) return;
+    if (!pizza.available) {
+      setManualOrderNotice("Questo prodotto è esaurito e non può essere aggiunto all'ordine telefonico.");
+      return;
+    }
     const nuovaRiga: RigaCarrello & { adminNote: string } = {
       id: crypto.randomUUID(),
       pizzaId: pizza.id,
       nome: pizza.nome,
+      categoria: manualCategoria,
       basePrezzo: pizza.prezzo,
-      extra: manualExtraSelezionati,
+      extra:
+        manualCategoria === "pizze"
+          ? manualExtraSelezionati.filter((extra) => extraByNome.get(extra)?.available ?? false)
+          : [],
       note: manualPizzaNote.trim(),
       adminNote: manualPizzaNote.trim(),
+      impastoId: manualCategoria === "pizze" ? impastoSelezionatoId : undefined,
+      impastoNome: manualCategoria === "pizze" ? impastoSelezionato?.nome : undefined,
+      impastoPrezzoExtra:
+        manualCategoria === "pizze" ? impastoSelezionato?.prezzoExtra ?? 0 : undefined,
+      capacityPizzaUnit: manualCategoria === "pizze" ? 1 : 0,
       quantita: manualPizzaQty,
     };
     setManualRows((prev) => {
@@ -2409,7 +3318,9 @@ export default function Home() {
     setManualOrarioScelto(generaSlotOrari()[0] ?? ORARI_PIZZERIA.openingTime);
     setManualPaymentMethod("cash_at_pickup");
     setManualRows([]);
-    setManualSelectedPizzaId(MENU_PIZZE[0]?.id ?? "");
+    setManualCategoria("pizze");
+    setManualSelectedPizzaId(menuPizze[0]?.id ?? "");
+    setImpastoSelezionatoId("classico");
     setManualExtraSelezionati([]);
     setManualPizzaQty(1);
     setManualPizzaNote("");
@@ -2418,6 +3329,7 @@ export default function Home() {
 
   function creaOrdineTelefonico() {
     if (!manualCustomerName.trim() || !manualPhoneNormalized || manualRows.length === 0) return;
+    if (manualRowsNonDisponibili) return;
     if (
       !manualSelectedSlotInfo?.selezionabile &&
       !(manualTipoOrdine === "consegna" && manualForceInsert)
@@ -2713,24 +3625,172 @@ export default function Home() {
                 <div className="space-y-3">
                   {numeroProdottiCarrello > 0 && (
                     <button
+                      type="button"
+                      title={carrelloNavTitle}
                       onClick={() => setTabCliente("carrello")}
                       className="sticky top-0 z-10 w-full rounded-2xl bg-[#8f3b18] px-4 py-3 text-sm font-semibold text-white shadow-sm"
                     >
                       Vai al carrello ({numeroProdottiCarrello})
                     </button>
                   )}
-                  {MENU_PIZZE.map((pizza) => (
-                    <button key={pizza.id} onClick={() => setPizzaSelezionata(pizza)} className="w-full rounded-2xl border border-[#f0d7c7] bg-white p-4 text-left shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="font-bold">{pizza.nome}</h3>
-                          <p className="text-sm text-[#82513a]">{pizza.descrizione}</p>
-                          <p className="mt-2 text-xs text-[#9a715c]">{pizza.ingredienti.join(", ")}</p>
+                  <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                    {[
+                      { id: "pizze", label: "Pizze" },
+                      { id: "bevande", label: "Bevande" },
+                      { id: "dolci", label: "Dolci" },
+                      { id: "combo", label: "Combo" },
+                    ].map((chip) => (
+                      <button
+                        key={chip.id}
+                        type="button"
+                        onClick={() => setMenuCategoriaCliente(chip.id as MenuCategoria)}
+                        className={`shrink-0 rounded-full px-4 py-2 text-xs font-semibold ${
+                          menuCategoriaCliente === chip.id
+                            ? "bg-[#8f3b18] text-white"
+                            : "border border-[#d59e7d] bg-white text-[#8f3b18]"
+                        }`}
+                      >
+                        {chip.label}
+                      </button>
+                    ))}
+                  </div>
+                  {menuCategoriaCliente === "pizze" &&
+                    menuPizze.map((pizza) => (
+                      <button
+                        key={pizza.id}
+                        onClick={() => {
+                          if (!pizza.available) {
+                            setMenuAddToast("Questa pizza è temporaneamente esaurita.");
+                            return;
+                          }
+                        setImpastoSelezionatoId("classico");
+                          setPizzaSelezionata(pizza);
+                        }}
+                        className={`w-full rounded-2xl border p-4 text-left shadow-sm ${
+                          pizza.available
+                            ? "border-[#f0d7c7] bg-white"
+                            : "border-red-200 bg-red-50/40 opacity-90"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="font-bold">
+                              {pizza.nome}
+                              {!pizza.available ? (
+                                <span className="ml-2 rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-bold text-red-900">
+                                  ESAURITA
+                                </span>
+                              ) : null}
+                            </h3>
+                            <p className="text-sm text-[#82513a]">{pizza.descrizione}</p>
+                            {!pizza.available ? (
+                              <p className="mt-1 text-xs text-[#82513a]">{CLIENTE_COPY_PRODOTTO_ESAURITO}</p>
+                            ) : null}
+                            <p className="mt-2 text-xs text-[#9a715c]">{pizza.ingredienti.join(", ")}</p>
+                          </div>
+                          <p className="font-semibold">{formatEuro(pizza.prezzo)}</p>
                         </div>
-                        <p className="font-semibold">{formatEuro(pizza.prezzo)}</p>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    ))}
+                  {menuCategoriaCliente === "bevande" &&
+                    bevande.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => aggiungiProdottoSempliceAlCarrello("bevande", item)}
+                        className={`w-full rounded-2xl border p-4 text-left ${
+                          item.available ? "border-[#f0d7c7] bg-white" : "border-red-200 bg-red-50/40"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold">
+                            {item.nome}
+                            {!item.available ? (
+                              <span className="ml-2 inline-block rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-bold text-red-900">
+                                ESAURITO
+                              </span>
+                            ) : null}
+                          </p>
+                          <p className="font-semibold">{formatEuro(item.prezzo)}</p>
+                        </div>
+                        {!item.available ? (
+                          <p className="mt-1 text-xs text-[#82513a]">{CLIENTE_COPY_PRODOTTO_ESAURITO}</p>
+                        ) : null}
+                      </button>
+                    ))}
+                  {menuCategoriaCliente === "dolci" &&
+                    dolci.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => aggiungiProdottoSempliceAlCarrello("dolci", item)}
+                        className={`w-full rounded-2xl border p-4 text-left ${
+                          item.available ? "border-[#f0d7c7] bg-white" : "border-red-200 bg-red-50/40"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold">
+                            {item.nome}
+                            {!item.available ? (
+                              <span className="ml-2 inline-block rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-bold text-red-900">
+                                ESAURITO
+                              </span>
+                            ) : null}
+                          </p>
+                          <p className="font-semibold">{formatEuro(item.prezzo)}</p>
+                        </div>
+                        {!item.available ? (
+                          <p className="mt-1 text-xs text-[#82513a]">{CLIENTE_COPY_PRODOTTO_ESAURITO}</p>
+                        ) : null}
+                      </button>
+                    ))}
+                  {menuCategoriaCliente === "combo" &&
+                    combo.map((item) => {
+                      const configurabile = comboHaProdottiBaseDisponibili(item, menuPizze, bevande, dolci);
+                      const disabilitata = !item.available || !configurabile;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            if (disabilitata) {
+                              setMenuAddToast(
+                                !item.available
+                                  ? CLIENTE_COPY_PRODOTTO_ESAURITO
+                                  : "Combo temporaneamente non disponibile."
+                              );
+                              return;
+                            }
+                            apriConfiguratoreCombo("cliente", item.id);
+                          }}
+                          className={`w-full rounded-2xl border p-4 text-left ${
+                            !disabilitata ? "border-[#f0d7c7] bg-white" : "border-red-200 bg-red-50/40"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-semibold">
+                              {item.nome}
+                              {disabilitata ? (
+                                <span className="ml-2 inline-block rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-bold text-red-900">
+                                  {!item.available ? "ESAURITO" : "NON DISP."}
+                                </span>
+                              ) : null}
+                            </p>
+                            <p className="font-semibold">
+                              {item.id === "combo-famiglia" ? formatEuro(COMBO_FAMIGLIA_PREZZO_FISSO) : formatEuro(item.prezzo)}
+                            </p>
+                          </div>
+                          <p className="mt-1 text-xs text-[#82513a]">{item.descrizione}</p>
+                          {disabilitata ? (
+                            <p className="mt-1 text-xs text-[#82513a]">
+                              {!item.available ? CLIENTE_COPY_PRODOTTO_ESAURITO : "Combo temporaneamente non disponibile."}
+                            </p>
+                          ) : (
+                            <p className="mt-2 text-xs font-semibold text-[#8f3b18]">Tocca per configurare</p>
+                          )}
+                        </button>
+                      );
+                    })}
                 </div>
               )}
 
@@ -2753,12 +3813,29 @@ export default function Home() {
                         </button>
                       </div>
                       {carrello.map((item) => {
-                        const unitario = item.basePrezzo + getTotaleExtra(item.extra);
+                        const unitario = getRigaPrezzoUnitario(item);
                         const totaleRiga = unitario * item.quantita;
+                        const categoria = item.categoria ?? "pizze";
+                        const rigaOk = rigaComponentiDisponibili(
+                          item,
+                          pizzaById,
+                          bevandeById,
+                          dolciById,
+                          comboById,
+                          extraByNome,
+                          impastoById
+                        );
+                        const extraNonDisponibili = carrelloRigaExtraNonDisponibili(item, extraByNome);
+                        const impastoNonDisponibile = carrelloRigaImpastoNonDisponibile(item, impastoById);
                         return (
                           <article key={item.id} className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
                             <div className="flex flex-wrap items-start justify-between gap-3">
-                              <h3 className="text-base font-semibold text-[#3a1f12]">{item.nome}</h3>
+                              <h3 className="text-base font-semibold text-[#3a1f12]">
+                                {item.nome}
+                                <span className="ml-2 rounded-full bg-[#f4dfd0] px-2 py-0.5 text-[10px] font-bold text-[#8f3b18]">
+                                  {getCategoriaLabel(item.categoria)}
+                                </span>
+                              </h3>
                               <p className="font-semibold tabular-nums text-[#8f3b18]">{formatEuro(totaleRiga)}</p>
                             </div>
                             <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -2791,18 +3868,44 @@ export default function Home() {
                                 Rimuovi
                               </button>
                             </div>
-                            <p className="mt-3 text-xs text-[#82513a]">
-                              Prezzo unitario (base + extra): {formatEuro(unitario)}
-                            </p>
-                            {item.extra.length > 0 && (
-                              <p className="mt-1 text-xs text-[#82513a]">Extra: {item.extra.join(", ")}</p>
-                            )}
-                            {item.note ? <p className="mt-1 text-xs text-[#82513a]">Note: {item.note}</p> : null}
-                            {(item.ingredientiRimossi?.length ?? 0) > 0 && (
-                              <p className="mt-1 text-xs text-[#82513a]">
-                                Senza: {item.ingredientiRimossi?.join(", ")}
+                            {categoria === "combo" && item.comboDettaglio ? (
+                              <div className="mt-3 space-y-1 rounded-xl bg-[#fffaf6] p-3 text-xs text-[#82513a]">
+                                <DettaglioTestoComboRiga riga={item} />
+                                <p className="mt-2 font-semibold text-[#3a1f12]">
+                                  Totale riga: {formatEuro(totaleRiga)}
+                                </p>
+                              </div>
+                            ) : categoria === "combo" ? (
+                              <p className="mt-3 text-xs text-[#82513a]">
+                                Dettaglio combo non disponibile per questa riga (dati precedenti alla configurazione).
                               </p>
+                            ) : (
+                              <>
+                                <p className="mt-3 text-xs text-[#82513a]">
+                                  Prezzo unitario: {formatEuro(unitario)}
+                                </p>
+                                {item.impastoNome ? (
+                                  <p className="mt-1 text-xs text-[#82513a]">
+                                    Impasto: {item.impastoNome}
+                                    {item.impastoPrezzoExtra ? ` + ${formatEuro(item.impastoPrezzoExtra)}` : " incluso"}
+                                  </p>
+                                ) : null}
+                                {item.extra.length > 0 && (
+                                  <p className="mt-1 text-xs text-[#82513a]">Extra: {item.extra.join(", ")}</p>
+                                )}
+                                {item.note ? <p className="mt-1 text-xs text-[#82513a]">Note: {item.note}</p> : null}
+                                {(item.ingredientiRimossi?.length ?? 0) > 0 && (
+                                  <p className="mt-1 text-xs text-[#82513a]">
+                                    Senza: {item.ingredientiRimossi?.join(", ")}
+                                  </p>
+                                )}
+                              </>
                             )}
+                            {!rigaOk || extraNonDisponibili.length > 0 || impastoNonDisponibile ? (
+                              <p className="mt-2 rounded-lg bg-red-100 px-2 py-1 text-xs font-semibold text-red-900">
+                                {CLIENTE_COPY_CARRELLO_PRODOTTO_ESAURITO}
+                              </p>
+                            ) : null}
                           </article>
                         );
                       })}
@@ -3085,6 +4188,13 @@ export default function Home() {
                       )}
                     </div>
                   )}
+                  {(prodottiNonDisponibiliNelCarrello ||
+                    extraNonDisponibiliNelCarrello ||
+                    impastiNonDisponibiliNelCarrello) && (
+                    <p className="rounded-xl bg-red-100 p-3 text-xs font-semibold text-red-900">
+                      {CLIENTE_COPY_CARRELLO_PRODOTTO_ESAURITO}
+                    </p>
+                  )}
                   <div className="rounded-2xl bg-[#f4dfd0] p-4">
                     <div className="flex items-center justify-between text-sm">
                       <p>Subtotale prodotti</p>
@@ -3145,7 +4255,14 @@ export default function Home() {
                   </div>
                   <button
                     onClick={confermaOrdine}
-                    disabled={consegnaInvalida || onlinePaymentPending || !canShowPaymentSection}
+                    disabled={
+                      consegnaInvalida ||
+                      onlinePaymentPending ||
+                      !canShowPaymentSection ||
+                      prodottiNonDisponibiliNelCarrello ||
+                      extraNonDisponibiliNelCarrello ||
+                      impastiNonDisponibiliNelCarrello
+                    }
                     className="w-full rounded-2xl bg-[#8f3b18] py-4 text-lg font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Conferma ordine
@@ -3329,23 +4446,40 @@ export default function Home() {
                         </div>
                         <div className="mt-2 space-y-2 rounded-xl bg-[#fff7f0] p-2">
                           {ordine.righe.map((riga) => {
-                            const prezzoUnitario = riga.basePrezzo + getTotaleExtra(riga.extra);
+                            const prezzoUnitario = getRigaPrezzoUnitario(riga);
                             const totaleRiga = prezzoUnitario * riga.quantita;
                             return (
                               <div key={riga.id} className="rounded-lg bg-white p-2">
                                 <p className="text-xs font-semibold text-[#6d4331]">
                                   {riga.quantita}x {riga.nome}
-                                </p>
-                                <p className="text-xs text-[#82513a]">
-                                  Prezzo unitario: {formatEuro(prezzoUnitario)}
+                                  <span className="ml-1 uppercase text-[#9a715c]">
+                                    ({getCategoriaLabel(riga.categoria)})
+                                  </span>
                                 </p>
                                 <p className="text-xs font-semibold text-[#6d4331]">
                                   Totale: {formatEuro(totaleRiga)}
                                 </p>
-                                {riga.extra.length > 0 && (
-                                  <p className="text-xs text-[#82513a]">Extra: {riga.extra.join(", ")}</p>
+                                {riga.categoria === "combo" && riga.comboDettaglio ? (
+                                  <div className="mt-1 text-xs text-[#82513a]">
+                                    <DettaglioTestoComboRiga riga={riga} />
+                                  </div>
+                                ) : (
+                                  <>
+                                    <p className="text-xs text-[#82513a]">
+                                      Prezzo unitario: {formatEuro(prezzoUnitario)}
+                                    </p>
+                                    {riga.extra.length > 0 && (
+                                      <p className="text-xs text-[#82513a]">Extra: {riga.extra.join(", ")}</p>
+                                    )}
+                                    {riga.impastoNome ? (
+                                      <p className="text-xs text-[#82513a]">
+                                        Impasto: {riga.impastoNome}
+                                        {riga.impastoPrezzoExtra ? ` (+${formatEuro(riga.impastoPrezzoExtra)})` : ""}
+                                      </p>
+                                    ) : null}
+                                    {riga.note && <p className="text-xs text-[#82513a]">Note: {riga.note}</p>}
+                                  </>
                                 )}
-                                {riga.note && <p className="text-xs text-[#82513a]">Note: {riga.note}</p>}
                               </div>
                             );
                           })}
@@ -4117,38 +5251,127 @@ export default function Home() {
 
                   <div className="space-y-2 rounded-xl bg-[#fff7f0] p-3">
                     <p className="text-xs font-semibold uppercase tracking-wide text-[#9a715c]">Prodotti</p>
+                    <div className="grid grid-cols-2 gap-2 rounded-xl border border-[#ecd7c8] bg-white p-1">
+                      {[
+                        { id: "pizze", label: "Pizze" },
+                        { id: "bevande", label: "Bevande" },
+                        { id: "dolci", label: "Dolci" },
+                        { id: "combo", label: "Combo" },
+                      ].map((cat) => (
+                        <button
+                          key={`manual-cat-${cat.id}`}
+                          type="button"
+                          onClick={() => {
+                            setManualCategoria(cat.id as MenuCategoria);
+                            const nextCatalog =
+                              cat.id === "pizze"
+                                ? menuPizze
+                                : cat.id === "bevande"
+                                  ? bevande
+                                  : cat.id === "dolci"
+                                    ? dolci
+                                    : combo;
+                            setManualSelectedPizzaId(nextCatalog[0]?.id ?? "");
+                          }}
+                          className={`rounded-lg py-2 text-xs font-semibold ${
+                            manualCategoria === cat.id ? "bg-[#f4dfd0] text-[#8f3b18]" : "text-[#82513a]"
+                          }`}
+                        >
+                          {cat.label}
+                        </button>
+                      ))}
+                    </div>
                     <select value={manualSelectedPizzaId} onChange={(e) => setManualSelectedPizzaId(e.target.value)} className="w-full rounded-xl border border-[#ecc8b1] p-3 text-sm">
-                      {MENU_PIZZE.map((pizza) => (
-                        <option key={pizza.id} value={pizza.id}>{pizza.nome} - {formatEuro(pizza.prezzo)}</option>
+                      {manualCatalogo.map((pizza) => (
+                        <option key={pizza.id} value={pizza.id}>
+                          {pizza.nome} - {formatEuro(pizza.prezzo)}
+                          {!pizza.available ? " · ESAURITO" : ""}
+                        </option>
                       ))}
                     </select>
-                    {manualPizzaSelezionata && (
+                    {manualPizzaSelezionata && manualCategoria === "combo" ? (
                       <div className="rounded-xl border border-[#ecd7c8] bg-white p-3 text-xs text-[#6d4331]">
                         <p className="text-sm font-semibold text-[#3a1f12]">{manualPizzaSelezionata.nome}</p>
-                        <p>Prezzo unitario: {formatEuro(manualPizzaSelezionata.prezzo)}</p>
-                        <p>Ingredienti base: {manualPizzaSelezionata.ingredienti.join(", ")}</p>
-                        <p className="mt-2 font-semibold text-[#3a1f12]">Extra disponibili</p>
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {EXTRA_INGREDIENTI.map((extra) => (
-                            <button
-                              key={`manual-extra-${extra}`}
-                              onClick={() =>
-                                setManualExtraSelezionati((prev) =>
-                                  prev.includes(extra) ? prev.filter((item) => item !== extra) : [...prev, extra]
-                                )
-                              }
-                              className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${
-                                manualExtraSelezionati.includes(extra)
-                                  ? "border-[#8f3b18] bg-[#f4dfd0] text-[#8f3b18]"
-                                  : "border-[#ecc8b1] bg-white text-[#82513a]"
-                              }`}
-                            >
-                              {extra} (+{formatEuro(getExtraPrezzo(extra))})
-                            </button>
-                          ))}
-                        </div>
+                        <p className="mt-1">{manualPizzaSelezionata.descrizione}</p>
+                        {!manualPizzaSelezionata.available ? (
+                          <p className="mt-2 font-semibold text-red-800">Combo non disponibile.</p>
+                        ) : !comboHaProdottiBaseDisponibili(
+                            manualPizzaSelezionata as MenuItemBase & { capacityPizzaUnit: number },
+                            menuPizze,
+                            bevande,
+                            dolci
+                          ) ? (
+                          <p className="mt-2 font-semibold text-red-800">Combo temporaneamente non disponibile.</p>
+                        ) : (
+                          <p className="mt-2 text-[11px] text-[#82513a]">
+                            Imposta la quantità qui sotto, poi configura ingredienti e prezzo nel pannello.
+                          </p>
+                        )}
                       </div>
-                    )}
+                    ) : null}
+                    {manualPizzaSelezionata && manualCategoria !== "combo" ? (
+                      <div className="rounded-xl border border-[#ecd7c8] bg-white p-3 text-xs text-[#6d4331]">
+                        <p className="text-sm font-semibold text-[#3a1f12]">
+                          {manualPizzaSelezionata.nome}
+                          {!manualPizzaSelezionata.available ? (
+                            <span className="ml-2 rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-bold text-red-900">
+                              ESAURITO
+                            </span>
+                          ) : null}
+                        </p>
+                        <p>Prezzo unitario: {formatEuro(manualPizzaSelezionata.prezzo)}</p>
+                        {Array.isArray((manualPizzaSelezionata as Pizza).ingredienti) ? (
+                          <>
+                            <p>Ingredienti base: {(manualPizzaSelezionata as Pizza).ingredienti.join(", ")}</p>
+                            <p className="mt-2 font-semibold text-[#3a1f12]">Scegli impasto</p>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {impasti.map((impasto) => (
+                                <button
+                                  key={`manual-impasto-${impasto.id}`}
+                                  type="button"
+                                  disabled={!impasto.available}
+                                  onClick={() => setImpastoSelezionatoId(impasto.id)}
+                                  className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${
+                                    impastoSelezionatoId === impasto.id
+                                      ? "border-[#8f3b18] bg-[#f4dfd0] text-[#8f3b18]"
+                                      : "border-[#ecc8b1] bg-white text-[#82513a]"
+                                  } disabled:cursor-not-allowed disabled:opacity-45`}
+                                >
+                                  {impasto.nome}
+                                  {impasto.prezzoExtra ? ` (+${formatEuro(impasto.prezzoExtra)})` : " (incluso)"}
+                                </button>
+                              ))}
+                            </div>
+                            <p className="mt-2 font-semibold text-[#3a1f12]">Extra disponibili</p>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {extraIngredienti.map((extra) => (
+                                <button
+                                  key={`manual-extra-${extra.nome}`}
+                                  disabled={!extra.available}
+                                  onClick={() =>
+                                    setManualExtraSelezionati((prev) =>
+                                      prev.includes(extra.nome)
+                                        ? prev.filter((item) => item !== extra.nome)
+                                        : [...prev, extra.nome]
+                                    )
+                                  }
+                                  className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${
+                                    manualExtraSelezionati.includes(extra.nome)
+                                      ? "border-[#8f3b18] bg-[#f4dfd0] text-[#8f3b18]"
+                                      : "border-[#ecc8b1] bg-white text-[#82513a]"
+                                  } disabled:cursor-not-allowed disabled:opacity-45`}
+                                >
+                                  {extra.nome} (+{formatEuro(getExtraPrezzo(extra.nome))})
+                                  {!extra.available ? " · Esaurito" : ""}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        ) : (
+                          <p className="mt-1 text-xs text-[#6d4331]">{manualPizzaSelezionata.descrizione}</p>
+                        )}
+                      </div>
+                    ) : null}
                     <div className="rounded-xl border border-[#ecc8b1] bg-white p-2">
                       <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#9a715c]">Quantita</p>
                       <div className="flex items-center justify-between gap-2">
@@ -4178,8 +5401,38 @@ export default function Home() {
                         placeholder="Quantita"
                       />
                     </div>
-                    <textarea value={manualPizzaNote} onChange={(e) => setManualPizzaNote(e.target.value)} className="h-20 w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Note pizza" />
-                    <button onClick={aggiungiPizzaOrdineManuale} className="w-full rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white">Aggiungi pizza all&apos;ordine</button>
+                    {manualCategoria !== "combo" ? (
+                      <textarea value={manualPizzaNote} onChange={(e) => setManualPizzaNote(e.target.value)} className="h-20 w-full rounded-xl border border-[#ecc8b1] p-3 text-sm" placeholder="Note pizza" />
+                    ) : null}
+                    {manualCategoria === "combo" ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          manualPizzaSelezionata &&
+                          apriConfiguratoreCombo("admin", manualPizzaSelezionata.id)
+                        }
+                        disabled={
+                          !manualPizzaSelezionata?.available ||
+                          !comboHaProdottiBaseDisponibili(
+                            manualPizzaSelezionata as MenuItemBase & { capacityPizzaUnit: number },
+                            menuPizze,
+                            bevande,
+                            dolci
+                          )
+                        }
+                        className="w-full rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Configura combo
+                      </button>
+                    ) : (
+                      <button
+                        onClick={aggiungiPizzaOrdineManuale}
+                        disabled={!manualPizzaSelezionata?.available}
+                        className="w-full rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Aggiungi prodotto all&apos;ordine
+                      </button>
+                    )}
                     {manualRows.length > 0 ? (
                       <p className="rounded-lg bg-white p-2 text-xs font-semibold text-[#3a1f12]">
                         Totale pizze: {manualPizzaCount} · Righe prodotti: {manualRows.length}
@@ -4188,11 +5441,31 @@ export default function Home() {
                     {manualRows.map((row) => (
                       <article key={row.id} className="rounded-xl border border-[#ecd7c8] bg-white p-3 text-sm">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold">{row.quantita}x {row.nome}</p>
-                          <p className="font-semibold">{formatEuro((row.basePrezzo + getTotaleExtra(row.extra)) * row.quantita)}</p>
+                          <p className="font-semibold">
+                            {row.quantita}x {row.nome} ({getCategoriaLabel(row.categoria)})
+                          </p>
+                          <p className="font-semibold">{formatEuro(getRigaPrezzoUnitario(row) * row.quantita)}</p>
                         </div>
-                        <p className="mt-1 text-xs text-[#6d4331]">Prezzo unitario: {formatEuro(row.basePrezzo + getTotaleExtra(row.extra))}</p>
-                        <p className="text-xs font-semibold text-[#6d4331]">Totale riga: {formatEuro((row.basePrezzo + getTotaleExtra(row.extra)) * row.quantita)}</p>
+                        {row.categoria === "combo" && row.comboDettaglio ? (
+                          <div className="mt-1 rounded-lg bg-[#fffaf6] p-2 text-xs text-[#6d4331]">
+                            <DettaglioTestoComboRiga riga={row} />
+                          </div>
+                        ) : (
+                          <>
+                            <p className="mt-1 text-xs text-[#6d4331]">
+                              Prezzo unitario: {formatEuro(getRigaPrezzoUnitario(row))}
+                            </p>
+                            {row.extra.length > 0 && <p className="mt-1 text-xs text-[#6d4331]">Extra: {row.extra.join(", ")}</p>}
+                            {row.impastoNome ? (
+                              <p className="mt-1 text-xs text-[#6d4331]">
+                                Impasto: {row.impastoNome}
+                                {row.impastoPrezzoExtra ? ` (+${formatEuro(row.impastoPrezzoExtra)})` : ""}
+                              </p>
+                            ) : null}
+                            {row.adminNote && <p className="mt-1 text-xs text-[#6d4331]">Note: {row.adminNote}</p>}
+                          </>
+                        )}
+                        <p className="text-xs font-semibold text-[#6d4331]">Totale riga: {formatEuro(getRigaPrezzoUnitario(row) * row.quantita)}</p>
                         <div className="mt-2 flex items-center gap-2">
                           <button
                             onClick={() => aggiornaQuantitaManualRow(row.id, Math.max(1, row.quantita - 1))}
@@ -4219,8 +5492,6 @@ export default function Home() {
                           />
                           <button onClick={() => removeManualRow(row.id)} className="rounded-lg border border-[#d9b7a3] px-3 py-2 text-xs font-semibold text-[#8f3b18]">Rimuovi</button>
                         </div>
-                        {row.extra.length > 0 && <p className="mt-1 text-xs text-[#6d4331]">Extra: {row.extra.join(", ")}</p>}
-                        {row.adminNote && <p className="mt-1 text-xs text-[#6d4331]">Note: {row.adminNote}</p>}
                       </article>
                     ))}
                     <p className="rounded-lg bg-white p-2 text-sm font-semibold text-[#6d4331]">Totale ordine: {formatEuro(manualTotal)}</p>
@@ -4240,7 +5511,12 @@ export default function Home() {
                     )}
                   </div>
 
-                  <button onClick={creaOrdineTelefonico} disabled={(!manualSelectedSlotInfo?.selezionabile && !(manualTipoOrdine === "consegna" && manualForceInsert)) || manualRows.length === 0} className="w-full rounded-2xl bg-[#8f3b18] py-4 text-base font-bold text-white disabled:opacity-50">
+                  {manualRowsNonDisponibili ? (
+                    <p className="rounded-xl bg-red-100 p-3 text-xs font-semibold text-red-900">
+                      Nell&apos;ordine ci sono prodotti o extra non disponibili. Rimuovili per continuare.
+                    </p>
+                  ) : null}
+                  <button onClick={creaOrdineTelefonico} disabled={(!manualSelectedSlotInfo?.selezionabile && !(manualTipoOrdine === "consegna" && manualForceInsert)) || manualRows.length === 0 || manualRowsNonDisponibili} className="w-full rounded-2xl bg-[#8f3b18] py-4 text-base font-bold text-white disabled:opacity-50">
                     Crea ordine telefonico
                   </button>
                   {manualOrderNotice && <p className="rounded-xl bg-[#f4dfd0] p-3 text-sm text-[#6d4331]">{manualOrderNotice}</p>}
@@ -4341,9 +5617,290 @@ export default function Home() {
               {adminTab === "prodotti" && (
                 <>
                   <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
+                    <h2 className="font-semibold">Gestione disponibilità</h2>
+                    <p className="mt-1 text-xs text-[#6d4331]">
+                      Imposta prodotti o extra come esauriti per bloccarli nel menu cliente.
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {menuPizze.map((pizza) => (
+                        <article key={`disp-${pizza.id}`} className="rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold text-[#3a1f12]">{pizza.nome}</p>
+                              <p className="text-xs text-[#6d4331]">{formatEuro(pizza.prezzo)}</p>
+                            </div>
+                            <div className="text-right">
+                              <p
+                                className={`text-xs font-semibold ${
+                                  pizza.available ? "text-emerald-700" : "text-red-800"
+                                }`}
+                              >
+                                {pizza.available ? "Disponibile" : "Esaurita"}
+                              </p>
+                              {!pizza.available ? (
+                                <span className="inline-block rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-bold text-red-900">
+                                  ESAURITA
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <label className="mt-2 block text-xs font-semibold text-[#3a1f12]">
+                            Motivo interno esaurimento
+                            <span className="mt-0.5 block text-[10px] font-normal text-[#9a715c]">
+                              Visibile solo allo staff, non al cliente.
+                            </span>
+                          </label>
+                          <input
+                            value={soldOutReasonDrafts[`pizza-${pizza.id}`] ?? pizza.soldOutReason ?? ""}
+                            onChange={(e) =>
+                              setSoldOutReasonDrafts((prev) => ({
+                                ...prev,
+                                [`pizza-${pizza.id}`]: e.target.value,
+                              }))
+                            }
+                            className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2 text-xs"
+                            placeholder="Opzionale"
+                          />
+                          {!(soldOutReasonDrafts[`pizza-${pizza.id}`] ?? pizza.soldOutReason ?? "").trim() ? (
+                            <p className="mt-1 text-[10px] text-[#6d4331]">{ADMIN_COPY_NESSUN_MOTIVO_INTERNO}</p>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => toggleDisponibilitaPizza(pizza.id, !pizza.available)}
+                            className={`mt-2 w-full rounded-xl py-2 text-xs font-semibold ${
+                              pizza.available
+                                ? "bg-red-700 text-white"
+                                : "border border-[#d59e7d] bg-white text-[#8f3b18]"
+                            }`}
+                          >
+                            {pizza.available ? "Metti esaurita" : "Rendi disponibile"}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                    <h3 className="mt-4 text-sm font-semibold text-[#3a1f12]">Extra ingredienti</h3>
+                    <div className="mt-2 space-y-2">
+                      {extraIngredienti.map((extra) => (
+                        <article key={`disp-extra-${extra.nome}`} className="rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold text-[#3a1f12]">{extra.nome}</p>
+                              <p className="text-xs text-[#6d4331]">{formatEuro(extra.prezzo)}</p>
+                            </div>
+                            <p
+                              className={`text-xs font-semibold ${
+                                extra.available ? "text-emerald-700" : "text-red-800"
+                              }`}
+                            >
+                              {extra.available ? "Disponibile" : "Esaurito"}
+                            </p>
+                          </div>
+                          <label className="mt-2 block text-xs font-semibold text-[#3a1f12]">
+                            Motivo interno esaurimento
+                            <span className="mt-0.5 block text-[10px] font-normal text-[#9a715c]">
+                              Visibile solo allo staff, non al cliente.
+                            </span>
+                          </label>
+                          <input
+                            value={soldOutReasonDrafts[`extra-${extra.nome}`] ?? extra.soldOutReason ?? ""}
+                            onChange={(e) =>
+                              setSoldOutReasonDrafts((prev) => ({
+                                ...prev,
+                                [`extra-${extra.nome}`]: e.target.value,
+                              }))
+                            }
+                            className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2 text-xs"
+                            placeholder="Opzionale"
+                          />
+                          {!(soldOutReasonDrafts[`extra-${extra.nome}`] ?? extra.soldOutReason ?? "").trim() ? (
+                            <p className="mt-1 text-[10px] text-[#6d4331]">{ADMIN_COPY_NESSUN_MOTIVO_INTERNO}</p>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => toggleDisponibilitaExtra(extra.nome, !extra.available)}
+                            className={`mt-2 w-full rounded-xl py-2 text-xs font-semibold ${
+                              extra.available
+                                ? "bg-red-700 text-white"
+                                : "border border-[#d59e7d] bg-white text-[#8f3b18]"
+                            }`}
+                          >
+                            {extra.available ? "Metti esaurito" : "Rendi disponibile"}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                    <h3 className="mt-4 text-sm font-semibold text-[#3a1f12]">Bevande</h3>
+                    <div className="mt-2 space-y-2">
+                      {bevande.map((item) => (
+                        <article key={`disp-bevanda-${item.id}`} className="rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-semibold">{item.nome}</p>
+                            <p className={`text-xs font-semibold ${item.available ? "text-emerald-700" : "text-red-800"}`}>
+                              {item.available ? "Disponibile" : "Esaurito"}
+                            </p>
+                          </div>
+                          <label className="mt-2 block text-xs font-semibold text-[#3a1f12]">
+                            Motivo interno esaurimento
+                            <span className="mt-0.5 block text-[10px] font-normal text-[#9a715c]">
+                              Visibile solo allo staff, non al cliente.
+                            </span>
+                          </label>
+                          <input
+                            value={soldOutReasonDrafts[`bevanda-${item.id}`] ?? item.soldOutReason ?? ""}
+                            onChange={(e) =>
+                              setSoldOutReasonDrafts((prev) => ({ ...prev, [`bevanda-${item.id}`]: e.target.value }))
+                            }
+                            className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2 text-xs"
+                            placeholder="Opzionale"
+                          />
+                          {!(soldOutReasonDrafts[`bevanda-${item.id}`] ?? item.soldOutReason ?? "").trim() ? (
+                            <p className="mt-1 text-[10px] text-[#6d4331]">{ADMIN_COPY_NESSUN_MOTIVO_INTERNO}</p>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => toggleDisponibilitaBevanda(item.id, !item.available)}
+                            className={`mt-2 w-full rounded-xl py-2 text-xs font-semibold ${
+                              item.available ? "bg-red-700 text-white" : "border border-[#d59e7d] bg-white text-[#8f3b18]"
+                            }`}
+                          >
+                            {item.available ? "Metti esaurito" : "Rendi disponibile"}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                    <h3 className="mt-4 text-sm font-semibold text-[#3a1f12]">Dolci</h3>
+                    <div className="mt-2 space-y-2">
+                      {dolci.map((item) => (
+                        <article key={`disp-dolce-${item.id}`} className="rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-semibold">{item.nome}</p>
+                            <p className={`text-xs font-semibold ${item.available ? "text-emerald-700" : "text-red-800"}`}>
+                              {item.available ? "Disponibile" : "Esaurito"}
+                            </p>
+                          </div>
+                          <label className="mt-2 block text-xs font-semibold text-[#3a1f12]">
+                            Motivo interno esaurimento
+                            <span className="mt-0.5 block text-[10px] font-normal text-[#9a715c]">
+                              Visibile solo allo staff, non al cliente.
+                            </span>
+                          </label>
+                          <input
+                            value={soldOutReasonDrafts[`dolce-${item.id}`] ?? item.soldOutReason ?? ""}
+                            onChange={(e) =>
+                              setSoldOutReasonDrafts((prev) => ({ ...prev, [`dolce-${item.id}`]: e.target.value }))
+                            }
+                            className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2 text-xs"
+                            placeholder="Opzionale"
+                          />
+                          {!(soldOutReasonDrafts[`dolce-${item.id}`] ?? item.soldOutReason ?? "").trim() ? (
+                            <p className="mt-1 text-[10px] text-[#6d4331]">{ADMIN_COPY_NESSUN_MOTIVO_INTERNO}</p>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => toggleDisponibilitaDolce(item.id, !item.available)}
+                            className={`mt-2 w-full rounded-xl py-2 text-xs font-semibold ${
+                              item.available ? "bg-red-700 text-white" : "border border-[#d59e7d] bg-white text-[#8f3b18]"
+                            }`}
+                          >
+                            {item.available ? "Metti esaurito" : "Rendi disponibile"}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                    <h3 className="mt-4 text-sm font-semibold text-[#3a1f12]">Combo</h3>
+                    <div className="mt-2 space-y-2">
+                      {combo.map((item) => (
+                        <article key={`disp-combo-${item.id}`} className="rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-semibold">{item.nome}</p>
+                            <p className={`text-xs font-semibold ${item.available ? "text-emerald-700" : "text-red-800"}`}>
+                              {item.available ? "Disponibile" : "Esaurito"}
+                            </p>
+                          </div>
+                          <label className="mt-2 block text-xs font-semibold text-[#3a1f12]">
+                            Motivo interno esaurimento
+                            <span className="mt-0.5 block text-[10px] font-normal text-[#9a715c]">
+                              Visibile solo allo staff, non al cliente.
+                            </span>
+                          </label>
+                          <input
+                            value={soldOutReasonDrafts[`combo-${item.id}`] ?? item.soldOutReason ?? ""}
+                            onChange={(e) =>
+                              setSoldOutReasonDrafts((prev) => ({ ...prev, [`combo-${item.id}`]: e.target.value }))
+                            }
+                            className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2 text-xs"
+                            placeholder="Opzionale"
+                          />
+                          {!(soldOutReasonDrafts[`combo-${item.id}`] ?? item.soldOutReason ?? "").trim() ? (
+                            <p className="mt-1 text-[10px] text-[#6d4331]">{ADMIN_COPY_NESSUN_MOTIVO_INTERNO}</p>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => toggleDisponibilitaCombo(item.id, !item.available)}
+                            className={`mt-2 w-full rounded-xl py-2 text-xs font-semibold ${
+                              item.available ? "bg-red-700 text-white" : "border border-[#d59e7d] bg-white text-[#8f3b18]"
+                            }`}
+                          >
+                            {item.available ? "Metti esaurito" : "Rendi disponibile"}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                    <h3 className="mt-4 text-sm font-semibold text-[#3a1f12]">Impasti</h3>
+                    <div className="mt-2 space-y-2">
+                      {impasti.map((impasto) => (
+                        <article key={`disp-impasto-${impasto.id}`} className="rounded-xl border border-[#ecd7c8] bg-[#fffaf6] p-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-semibold">
+                              {impasto.nome} {impasto.prezzoExtra ? `(+${formatEuro(impasto.prezzoExtra)})` : "(incluso)"}
+                            </p>
+                            <p className={`text-xs font-semibold ${impasto.available ? "text-emerald-700" : "text-red-800"}`}>
+                              {impasto.available ? "Disponibile" : "Esaurito"}
+                            </p>
+                          </div>
+                          <label className="mt-2 block text-xs font-semibold text-[#3a1f12]">
+                            Motivo interno esaurimento
+                            <span className="mt-0.5 block text-[10px] font-normal text-[#9a715c]">
+                              Visibile solo allo staff, non al cliente.
+                            </span>
+                          </label>
+                          <input
+                            value={soldOutReasonDrafts[`impasto-${impasto.id}`] ?? impasto.soldOutReason ?? ""}
+                            onChange={(e) =>
+                              setSoldOutReasonDrafts((prev) => ({ ...prev, [`impasto-${impasto.id}`]: e.target.value }))
+                            }
+                            className="mt-1 w-full rounded-lg border border-[#ecc8b1] p-2 text-xs"
+                            placeholder="Opzionale"
+                          />
+                          {!(soldOutReasonDrafts[`impasto-${impasto.id}`] ?? impasto.soldOutReason ?? "").trim() ? (
+                            <p className="mt-1 text-[10px] text-[#6d4331]">{ADMIN_COPY_NESSUN_MOTIVO_INTERNO}</p>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => toggleDisponibilitaImpasto(impasto.id, !impasto.available)}
+                            disabled={impasto.id === "classico" && !impasto.available}
+                            className={`mt-2 w-full rounded-xl py-2 text-xs font-semibold ${
+                              impasto.available ? "bg-red-700 text-white" : "border border-[#d59e7d] bg-white text-[#8f3b18]"
+                            }`}
+                          >
+                            {impasto.available ? "Metti esaurito" : "Rendi disponibile"}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                  <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
                     <p className="text-xs text-[#6d4331]">
                       Dati demo calcolati sugli ordini presenti nella simulazione. Nella versione reale questi dati saranno generati dagli ordini effettivi.
                     </p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                      <p className="rounded-lg bg-[#fff7f0] p-2">Pizze: <span className="font-semibold">{menuPizze.length}</span></p>
+                      <p className="rounded-lg bg-[#fff7f0] p-2">Bevande: <span className="font-semibold">{bevande.length}</span></p>
+                      <p className="rounded-lg bg-[#fff7f0] p-2">Dolci: <span className="font-semibold">{dolci.length}</span></p>
+                      <p className="rounded-lg bg-[#fff7f0] p-2">Combo: <span className="font-semibold">{combo.length}</span></p>
+                      <p className="rounded-lg bg-[#fff7f0] p-2">Impasti: <span className="font-semibold">{impasti.length}</span></p>
+                      <p className="rounded-lg bg-[#fff7f0] p-2">Extra: <span className="font-semibold">{extraIngredienti.length}</span></p>
+                    </div>
                   </section>
                   <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
                     <h2 className="font-semibold">Pizze più vendute</h2>
@@ -4515,7 +6072,16 @@ export default function Home() {
                     <MetricCard titolo="Pizze vendute oggi" valore={String(pizzeVenduteOggi)} />
                     <MetricCard titolo="Comande da stampare" valore={String(comandeDaStampare)} />
                     <MetricCard titolo="Slot critici/sovraccarichi" valore={String(slotCriticiCount)} />
+                    <MetricCard titolo="Prodotti esauriti" valore={String(pizzeEsaurite.length + bevandeEsaurite.length + dolciEsauriti.length + comboEsaurite.length)} />
+                    <MetricCard titolo="Extra esauriti" valore={String(extraEsauriti.length + impastiEsauriti.length)} />
                   </section>
+                  {pizzeEsaurite.length + bevandeEsaurite.length + dolciEsauriti.length + comboEsaurite.length > 0 ? (
+                    <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
+                      <p className="text-sm font-semibold text-amber-950">
+                        Attenzione: alcuni prodotti non sono ordinabili dai clienti.
+                      </p>
+                    </section>
+                  ) : null}
                   <section className="rounded-2xl border border-[#f0d7c7] bg-white p-4">
                     <h2 className="font-semibold">Riepilogo operativo breve</h2>
                     <div className="mt-3 space-y-2 text-sm text-[#6d4331]">
@@ -4537,7 +6103,12 @@ export default function Home() {
             <div className="grid grid-cols-3 gap-1 text-[10px] font-semibold leading-tight sm:grid-cols-6 sm:text-[11px]">
               <button className={`rounded-xl py-2 ${tabCliente === "home" ? "bg-[#f4dfd0]" : ""}`} onClick={() => setTabCliente("home")}>Home</button>
               <button className={`rounded-xl py-2 ${tabCliente === "menu" ? "bg-[#f4dfd0]" : ""}`} onClick={() => setTabCliente("menu")}>Menu</button>
-              <button className={`rounded-xl py-2 ${tabCliente === "carrello" ? "bg-[#f4dfd0]" : ""}`} onClick={() => setTabCliente("carrello")}>
+              <button
+                type="button"
+                title={carrelloNavTitle}
+                className={`rounded-xl py-2 ${tabCliente === "carrello" ? "bg-[#f4dfd0]" : ""}`}
+                onClick={() => setTabCliente("carrello")}
+              >
                 Carrello{numeroProdottiCarrello > 0 ? ` (${numeroProdottiCarrello})` : ""}
               </button>
               <button
@@ -4575,50 +6146,61 @@ export default function Home() {
       )}
 
       {showReorderPicker && (
-        <div className="fixed inset-0 z-20 bg-black/30 p-3">
-          <div className="mx-auto mt-16 max-w-md rounded-3xl bg-white p-5">
-            <h3 className="text-lg font-bold">Scegli cosa riordinare</h3>
-            <div className="mt-3 space-y-2">
-              <button
-                onClick={caricaUltimoOrdine}
-                className="w-full rounded-xl border border-[#d59e7d] bg-[#fff7f0] p-3 text-left"
-              >
-                <p className="text-sm font-semibold">Riordina ultimo ordine</p>
-                <p className="text-xs text-[#6d4331]">Carica l&apos;ultimo ordine effettuato</p>
-              </button>
-              {profiloCliente.savedOrders.map((saved) => (
+        <div className="fixed inset-0 z-20 flex items-end justify-center bg-black/30 p-3 pb-4 pt-4 sm:items-center">
+          <div
+            className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reorder-picker-title"
+          >
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-5">
+              <h3 id="reorder-picker-title" className="text-lg font-bold">
+                Scegli cosa riordinare
+              </h3>
+              <div className="mt-3 space-y-2">
                 <button
-                  key={saved.id}
-                  onClick={() => caricaSavedOrder(saved)}
+                  onClick={caricaUltimoOrdine}
                   className="w-full rounded-xl border border-[#d59e7d] bg-[#fff7f0] p-3 text-left"
                 >
-                  <p className="text-sm font-semibold">{saved.nomeOrdine}</p>
-                  <p className="text-xs text-[#6d4331]">
-                    {saved.prodotti.reduce((acc, p) => acc + p.quantita, 0)} pizze - {formatEuro(saved.totaleStimato)}
-                  </p>
+                  <p className="text-sm font-semibold">Riordina ultimo ordine</p>
+                  <p className="text-xs text-[#6d4331]">Carica l&apos;ultimo ordine effettuato</p>
                 </button>
-              ))}
+                {profiloCliente.savedOrders.map((saved) => (
+                  <button
+                    key={saved.id}
+                    onClick={() => caricaSavedOrder(saved)}
+                    className="w-full rounded-xl border border-[#d59e7d] bg-[#fff7f0] p-3 text-left"
+                  >
+                    <p className="text-sm font-semibold">{saved.nomeOrdine}</p>
+                    <p className="text-xs text-[#6d4331]">
+                      {saved.prodotti.reduce((acc, p) => acc + p.quantita, 0)} pizze - {formatEuro(saved.totaleStimato)}
+                    </p>
+                  </button>
+                ))}
+              </div>
             </div>
-            <button
-              onClick={() => setShowReorderPicker(false)}
-              className="mt-4 w-full rounded-xl border border-[#d59e7d] py-3 text-sm font-semibold text-[#8f3b18]"
-            >
-              Chiudi
-            </button>
+            <div className="shrink-0 border-t border-[#ecd7c8] bg-white px-5 pb-5 pt-3">
+              <button
+                onClick={() => setShowReorderPicker(false)}
+                className="w-full rounded-xl border border-[#d59e7d] py-3 text-sm font-semibold text-[#8f3b18]"
+              >
+                Chiudi
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {showSvuotaCarrelloModal && (
         <div
-          className="fixed inset-0 z-20 flex items-center justify-center bg-black/35 p-4"
+          className="fixed inset-0 z-20 flex items-center justify-center bg-black/35 p-3 py-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="svuota-carrello-title"
           onClick={chiudiModalSvuotaCarrello}
         >
           <div
-            className="w-full max-w-sm rounded-3xl border border-[#ecc8b1] bg-white p-5 shadow-xl"
+            className="max-h-[90vh] w-full max-w-sm overflow-y-auto overscroll-contain rounded-3xl border border-[#ecc8b1] bg-white p-5 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 id="svuota-carrello-title" className="text-lg font-bold text-[#3a1f12]">
@@ -4646,14 +6228,14 @@ export default function Home() {
 
       {showEliminaTutteNotificheModal && (
         <div
-          className="fixed inset-0 z-20 flex items-center justify-center bg-black/35 p-4"
+          className="fixed inset-0 z-20 flex items-center justify-center bg-black/35 p-3 py-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="elimina-tutte-notifiche-title"
           onClick={() => setShowEliminaTutteNotificheModal(false)}
         >
           <div
-            className="w-full max-w-sm rounded-3xl border border-[#ecc8b1] bg-white p-5 shadow-xl"
+            className="max-h-[90vh] w-full max-w-sm overflow-y-auto overscroll-contain rounded-3xl border border-[#ecc8b1] bg-white p-5 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 id="elimina-tutte-notifiche-title" className="text-lg font-bold text-[#3a1f12]">
@@ -4683,199 +6265,667 @@ export default function Home() {
       )}
 
       {pizzaSelezionata && (
-        <div className="fixed inset-0 z-20 bg-black/30 p-3">
-          <div className="mx-auto mt-16 max-w-md rounded-3xl bg-white p-5">
-            <h3 className="text-lg font-bold">{pizzaSelezionata.nome}</h3>
-            <p className="mt-1 text-sm text-[#82513a]">{pizzaSelezionata.ingredienti.join(", ")}</p>
-            <p className="mt-1 font-semibold">{formatEuro(pizzaSelezionata.prezzo)}</p>
-            <div className="mt-4">
-              <p className="text-sm font-semibold">Extra ingredienti</p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {EXTRA_INGREDIENTI.map((extra) => (
-                  <button
-                    key={extra}
-                    onClick={() =>
-                      setExtraSelezionati((prev) =>
-                        prev.includes(extra) ? prev.filter((x) => x !== extra) : [...prev, extra]
-                      )
-                    }
-                    className={`rounded-xl border px-3 py-2 text-sm ${extraSelezionati.includes(extra) ? "border-[#8f3b18] bg-[#f4dfd0]" : "border-[#e8cdb7]"}`}
-                  >
-                    {extra} + {formatEuro(getExtraPrezzo(extra))}
-                  </button>
-                ))}
+        <div className="fixed inset-0 z-20 flex items-end justify-center bg-black/30 p-3 pb-4 pt-4 sm:items-center">
+          <div
+            className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pizza-custom-title"
+          >
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-5">
+              <h3 id="pizza-custom-title" className="text-lg font-bold">
+                {pizzaSelezionata.nome}
+              </h3>
+              <p className="mt-1 text-sm text-[#82513a]">{pizzaSelezionata.ingredienti.join(", ")}</p>
+              <p className="mt-1 font-semibold">{formatEuro(pizzaSelezionata.prezzo)}</p>
+              <div className="mt-4">
+                <p className="text-sm font-semibold">Scegli impasto</p>
+                <div className="mt-2 grid grid-cols-1 gap-2">
+                  {impasti.map((impasto) => (
+                    <button
+                      key={impasto.id}
+                      type="button"
+                      disabled={!impasto.available}
+                      onClick={() => setImpastoSelezionatoId(impasto.id)}
+                      className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                        impastoSelezionatoId === impasto.id
+                          ? "border-[#8f3b18] bg-[#f4dfd0]"
+                          : "border-[#e8cdb7] bg-white"
+                      } disabled:cursor-not-allowed disabled:opacity-45`}
+                    >
+                      <p className="font-semibold">{impasto.nome}</p>
+                      <p className="text-xs text-[#82513a]">
+                        {impasto.prezzoExtra === 0 ? "incluso" : `+ ${formatEuro(impasto.prezzoExtra)}`}
+                      </p>
+                      {!impasto.available ? (
+                        <>
+                          <span className="mt-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-900">
+                            Esaurito
+                          </span>
+                          <p className="mt-0.5 text-[10px] leading-snug text-[#82513a]">
+                            {CLIENTE_COPY_PRODOTTO_ESAURITO}
+                          </p>
+                        </>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
               </div>
+              <div className="mt-4">
+                <p className="text-sm font-semibold">Extra ingredienti</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {extraIngredienti.map((extra) => (
+                    <button
+                      key={extra.nome}
+                      disabled={!extra.available}
+                      onClick={() =>
+                        setExtraSelezionati((prev) =>
+                          prev.includes(extra.nome)
+                            ? prev.filter((x) => x !== extra.nome)
+                            : [...prev, extra.nome]
+                        )
+                      }
+                      className={`rounded-xl border px-3 py-2 text-sm ${
+                        extraSelezionati.includes(extra.nome)
+                          ? "border-[#8f3b18] bg-[#f4dfd0]"
+                          : "border-[#e8cdb7]"
+                      } disabled:cursor-not-allowed disabled:opacity-45`}
+                    >
+                      <span className="block">
+                        {extra.nome} + {formatEuro(getExtraPrezzo(extra.nome))}
+                        {!extra.available ? (
+                          <span className="ml-1 inline-block rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-900 align-middle">
+                            Esaurito
+                          </span>
+                        ) : null}
+                      </span>
+                      {!extra.available ? (
+                        <span className="mt-0.5 block text-[10px] leading-snug text-[#82513a]">
+                          {CLIENTE_COPY_PRODOTTO_ESAURITO}
+                        </span>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="mt-4 block pb-1 text-sm font-semibold">
+                Note
+                <textarea
+                  value={notePizza}
+                  onChange={(e) => setNotePizza(e.target.value)}
+                  className="mt-2 h-20 w-full rounded-xl border border-[#e8cdb7] p-3 text-sm"
+                  placeholder="Es. ben cotta, senza origano..."
+                />
+              </label>
             </div>
-            <label className="mt-4 block text-sm font-semibold">
-              Note
-              <textarea value={notePizza} onChange={(e) => setNotePizza(e.target.value)} className="mt-2 h-20 w-full rounded-xl border border-[#e8cdb7] p-3 text-sm" placeholder="Es. ben cotta, senza origano..." />
-            </label>
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <button onClick={() => setPizzaSelezionata(null)} className="rounded-xl border border-[#d59e7d] py-3 font-semibold">Annulla</button>
-              <button onClick={aggiungiPizza} className="rounded-xl bg-[#8f3b18] py-3 font-semibold text-white">Aggiungi</button>
+            <div className="shrink-0 border-t border-[#ecd7c8] bg-white px-5 pb-5 pt-3">
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPizzaSelezionata(null)}
+                  className="rounded-xl border border-[#d59e7d] py-3 font-semibold"
+                >
+                  Annulla
+                </button>
+                <button
+                  type="button"
+                  onClick={aggiungiPizza}
+                  disabled={!pizzaSelezionata.available}
+                  className="rounded-xl bg-[#8f3b18] py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Aggiungi
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
+      {comboConfigModalCtx ? (
+        (() => {
+          const tpl = combo.find((c) => c.id === comboConfigModalCtx.comboTemplateId);
+          if (!tpl) return null;
+          const pbPizza = pizzaById.get(comboPbPizzaId);
+          const pbBib = bevandeById.get(comboPbBibitaId);
+          const pbImp = impastoById.get(comboPbImpastoId);
+          const pbPizzaSub =
+            pbPizza && pbImp
+              ? pbPizza.prezzo + getTotaleExtra(comboPbExtra) + (pbImp.prezzoExtra ?? 0)
+              : 0;
+          const pbBibPre = pbBib?.prezzo ?? 0;
+          const pbTot =
+            pbPizza && pbBib && pbImp ? Math.max(0, pbPizzaSub + pbBibPre - COMBO_SCONTO_EUR) : 0;
+          const dolPizza = pizzaById.get(comboDolPizzaId);
+          const dolD = dolciById.get(comboDolDolceId);
+          const dolImp = impastoById.get(comboDolImpastoId);
+          const dolPizzaSub =
+            dolPizza && dolImp
+              ? dolPizza.prezzo + getTotaleExtra(comboDolExtra) + (dolImp.prezzoExtra ?? 0)
+              : 0;
+          const dolPre = dolD?.prezzo ?? 0;
+          const dolTot =
+            dolPizza && dolD && dolImp ? Math.max(0, dolPizzaSub + dolPre - COMBO_SCONTO_EUR) : 0;
+          return (
+            <div className="fixed inset-0 z-[30] flex items-end justify-center bg-black/35 p-3 pb-4 pt-4 sm:items-center">
+              <div
+                className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-xl"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="combo-config-title"
+              >
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-5">
+                  <h3 id="combo-config-title" className="text-lg font-bold text-[#3a1f12]">
+                    {tpl.nome}
+                  </h3>
+                  <p className="mt-1 text-xs text-[#6d4331]">{tpl.descrizione}</p>
+                  {comboConfigModalCtx.ctx === "admin" ? (
+                    <p className="mt-2 rounded-lg bg-[#fff7f0] p-2 text-xs text-[#6d4331]">
+                      Quantità impostata nel pannello ordine telefonico: <strong>{manualPizzaQty}</strong> (stessa
+                      configurazione = stessa riga).
+                    </p>
+                  ) : null}
+                  {comboModalError ? (
+                    <p className="mt-3 rounded-lg bg-red-100 p-2 text-xs font-semibold text-red-900">
+                      {comboModalError}
+                    </p>
+                  ) : null}
+                  {tpl.id === "combo-pizza-bibita" ? (
+                    <>
+                      <p className="mt-4 text-sm font-semibold">Scegli la pizza</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2">
+                        {menuPizze.map((pizza) => (
+                          <button
+                            key={`cb-pizza-${pizza.id}`}
+                            type="button"
+                            disabled={!pizza.available}
+                            onClick={() => pizza.available && setComboPbPizzaId(pizza.id)}
+                            className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                              comboPbPizzaId === pizza.id
+                                ? "border-[#8f3b18] bg-[#f4dfd0]"
+                                : "border-[#e8cdb7] bg-white"
+                            } disabled:cursor-not-allowed disabled:opacity-45`}
+                          >
+                            <span className="font-semibold">{pizza.nome}</span>
+                            <span className="ml-2 text-xs text-[#82513a]">{formatEuro(pizza.prezzo)}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-4 text-sm font-semibold">Impasto</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2">
+                        {impasti.map((impasto) => (
+                          <button
+                            key={`cb-imp-pb-${impasto.id}`}
+                            type="button"
+                            disabled={!impasto.available}
+                            onClick={() => impasto.available && setComboPbImpastoId(impasto.id)}
+                            className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                              comboPbImpastoId === impasto.id
+                                ? "border-[#8f3b18] bg-[#f4dfd0]"
+                                : "border-[#e8cdb7] bg-white"
+                            } disabled:cursor-not-allowed disabled:opacity-45`}
+                          >
+                            {impasto.nome}{" "}
+                            {impasto.prezzoExtra ? `(+${formatEuro(impasto.prezzoExtra)})` : "(incluso)"}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-4 text-sm font-semibold">Extra</p>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        {extraIngredienti.map((extra) => (
+                          <button
+                            key={`cb-ex-pb-${extra.nome}`}
+                            type="button"
+                            disabled={!extra.available}
+                            onClick={() =>
+                              setComboPbExtra((prev) =>
+                                prev.includes(extra.nome)
+                                  ? prev.filter((x) => x !== extra.nome)
+                                  : [...prev, extra.nome]
+                              )
+                            }
+                            className={`rounded-xl border px-2 py-2 text-xs ${
+                              comboPbExtra.includes(extra.nome)
+                                ? "border-[#8f3b18] bg-[#f4dfd0]"
+                                : "border-[#e8cdb7]"
+                            } disabled:cursor-not-allowed disabled:opacity-45`}
+                          >
+                            {extra.nome} +{formatEuro(extra.prezzo)}
+                          </button>
+                        ))}
+                      </div>
+                      <label className="mt-4 block text-sm font-semibold">
+                        Note pizza
+                        <textarea
+                          value={comboPbNote}
+                          onChange={(e) => setComboPbNote(e.target.value)}
+                          className="mt-2 h-16 w-full rounded-xl border border-[#e8cdb7] p-2 text-sm"
+                          placeholder="Opzionale"
+                        />
+                      </label>
+                      <p className="mt-4 text-sm font-semibold">Scegli la bibita</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2">
+                        {bevande.map((b) => (
+                          <button
+                            key={`cb-bib-${b.id}`}
+                            type="button"
+                            disabled={!b.available}
+                            onClick={() => b.available && setComboPbBibitaId(b.id)}
+                            className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                              comboPbBibitaId === b.id
+                                ? "border-[#8f3b18] bg-[#f4dfd0]"
+                                : "border-[#e8cdb7] bg-white"
+                            } disabled:cursor-not-allowed disabled:opacity-45`}
+                          >
+                            {b.nome} — {formatEuro(b.prezzo)}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-4 rounded-xl bg-[#fff7f0] p-3 text-xs text-[#3a1f12]">
+                        <p>Prezzo pizza (base + impasto + extra): {formatEuro(pbPizzaSub)}</p>
+                        <p>Prezzo bibita: {formatEuro(pbBibPre)}</p>
+                        <p>Sconto combo: - {formatEuro(COMBO_SCONTO_EUR)}</p>
+                        <p className="mt-1 font-bold">Totale combo: {formatEuro(pbTot)}</p>
+                      </div>
+                    </>
+                  ) : null}
+                  {tpl.id === "combo-famiglia" ? (
+                    <>
+                      <p className="mt-4 text-sm font-semibold">Quattro pizze</p>
+                      {[0, 1, 2, 3].map((slot) => (
+                        <div key={`cf-p-${slot}`} className="mt-2 space-y-1">
+                          <label className="text-xs font-semibold text-[#6d4331]">Pizza {slot + 1}</label>
+                          <select
+                            value={comboFamPizze[slot]}
+                            onChange={(e) =>
+                              setComboFamPizze((prev) => {
+                                const n = [...prev] as [string, string, string, string];
+                                n[slot] = e.target.value;
+                                return n;
+                              })
+                            }
+                            className="w-full rounded-xl border border-[#ecc8b1] p-2 text-sm"
+                          >
+                            {menuPizze.filter((p) => p.available).map((p) => (
+                              <option key={`opt-fam-${slot}-${p.id}`} value={p.id}>
+                                {p.nome}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            value={comboFamNotePizze[slot]}
+                            onChange={(e) =>
+                              setComboFamNotePizze((prev) => {
+                                const n = [...prev] as [string, string, string, string];
+                                n[slot] = e.target.value;
+                                return n;
+                              })
+                            }
+                            className="w-full rounded-xl border border-[#ecc8b1] p-2 text-xs"
+                            placeholder="Note pizza (opzionale)"
+                          />
+                        </div>
+                      ))}
+                      <p className="mt-4 text-sm font-semibold">Due bibite</p>
+                      <label className="mt-2 block text-xs font-semibold text-[#6d4331]">Bibita 1</label>
+                      <select
+                        value={comboFamBibita1}
+                        onChange={(e) => setComboFamBibita1(e.target.value)}
+                        className="mt-1 w-full rounded-xl border border-[#ecc8b1] p-2 text-sm"
+                      >
+                        {bevande.filter((b) => b.available).map((b) => (
+                          <option key={`cf-b1-${b.id}`} value={b.id}>
+                            {b.nome}
+                          </option>
+                        ))}
+                      </select>
+                      <label className="mt-2 block text-xs font-semibold text-[#6d4331]">Bibita 2</label>
+                      <select
+                        value={comboFamBibita2}
+                        onChange={(e) => setComboFamBibita2(e.target.value)}
+                        className="mt-1 w-full rounded-xl border border-[#ecc8b1] p-2 text-sm"
+                      >
+                        {bevande.filter((b) => b.available).map((b) => (
+                          <option key={`cf-b2-${b.id}`} value={b.id}>
+                            {b.nome}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="mt-4 rounded-xl bg-[#fff7f0] p-3 text-xs text-[#3a1f12]">
+                        <p className="font-semibold">Prezzo fisso combo famiglia</p>
+                        <p className="text-base font-bold">{formatEuro(COMBO_FAMIGLIA_PREZZO_FISSO)}</p>
+                        <p className="mt-1 text-[#6d4331]">
+                          Include 4 pizze scelte e 2 bibite. La capacità slot conta 4 pizze.
+                        </p>
+                      </div>
+                    </>
+                  ) : null}
+                  {tpl.id === "combo-dolce" ? (
+                    <>
+                      <p className="mt-4 text-sm font-semibold">Scegli la pizza</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2">
+                        {menuPizze.map((pizza) => (
+                          <button
+                            key={`cd-pizza-${pizza.id}`}
+                            type="button"
+                            disabled={!pizza.available}
+                            onClick={() => pizza.available && setComboDolPizzaId(pizza.id)}
+                            className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                              comboDolPizzaId === pizza.id
+                                ? "border-[#8f3b18] bg-[#f4dfd0]"
+                                : "border-[#e8cdb7] bg-white"
+                            } disabled:cursor-not-allowed disabled:opacity-45`}
+                          >
+                            <span className="font-semibold">{pizza.nome}</span>
+                            <span className="ml-2 text-xs text-[#82513a]">{formatEuro(pizza.prezzo)}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-4 text-sm font-semibold">Impasto</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2">
+                        {impasti.map((impasto) => (
+                          <button
+                            key={`cd-imp-${impasto.id}`}
+                            type="button"
+                            disabled={!impasto.available}
+                            onClick={() => impasto.available && setComboDolImpastoId(impasto.id)}
+                            className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                              comboDolImpastoId === impasto.id
+                                ? "border-[#8f3b18] bg-[#f4dfd0]"
+                                : "border-[#e8cdb7] bg-white"
+                            } disabled:cursor-not-allowed disabled:opacity-45`}
+                          >
+                            {impasto.nome}{" "}
+                            {impasto.prezzoExtra ? `(+${formatEuro(impasto.prezzoExtra)})` : "(incluso)"}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-4 text-sm font-semibold">Extra</p>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        {extraIngredienti.map((extra) => (
+                          <button
+                            key={`cd-ex-${extra.nome}`}
+                            type="button"
+                            disabled={!extra.available}
+                            onClick={() =>
+                              setComboDolExtra((prev) =>
+                                prev.includes(extra.nome)
+                                  ? prev.filter((x) => x !== extra.nome)
+                                  : [...prev, extra.nome]
+                              )
+                            }
+                            className={`rounded-xl border px-2 py-2 text-xs ${
+                              comboDolExtra.includes(extra.nome)
+                                ? "border-[#8f3b18] bg-[#f4dfd0]"
+                                : "border-[#e8cdb7]"
+                            } disabled:cursor-not-allowed disabled:opacity-45`}
+                          >
+                            {extra.nome} +{formatEuro(extra.prezzo)}
+                          </button>
+                        ))}
+                      </div>
+                      <label className="mt-4 block text-sm font-semibold">
+                        Note pizza
+                        <textarea
+                          value={comboDolNote}
+                          onChange={(e) => setComboDolNote(e.target.value)}
+                          className="mt-2 h-16 w-full rounded-xl border border-[#e8cdb7] p-2 text-sm"
+                          placeholder="Opzionale"
+                        />
+                      </label>
+                      <p className="mt-4 text-sm font-semibold">Scegli il dolce</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2">
+                        {dolci.map((d) => (
+                          <button
+                            key={`cd-dol-${d.id}`}
+                            type="button"
+                            disabled={!d.available}
+                            onClick={() => d.available && setComboDolDolceId(d.id)}
+                            className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                              comboDolDolceId === d.id
+                                ? "border-[#8f3b18] bg-[#f4dfd0]"
+                                : "border-[#e8cdb7] bg-white"
+                            } disabled:cursor-not-allowed disabled:opacity-45`}
+                          >
+                            {d.nome} — {formatEuro(d.prezzo)}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-4 rounded-xl bg-[#fff7f0] p-3 text-xs text-[#3a1f12]">
+                        <p>Prezzo pizza (base + impasto + extra): {formatEuro(dolPizzaSub)}</p>
+                        <p>Prezzo dolce: {formatEuro(dolPre)}</p>
+                        <p>Sconto combo: - {formatEuro(COMBO_SCONTO_EUR)}</p>
+                        <p className="mt-1 font-bold">Totale combo: {formatEuro(dolTot)}</p>
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+                <div className="shrink-0 border-t border-[#ecd7c8] bg-white px-5 pb-5 pt-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={chiudiComboConfigModal}
+                      className="rounded-xl border border-[#d59e7d] py-3 font-semibold text-[#8f3b18]"
+                    >
+                      Annulla
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setComboModalError("");
+                        confermaComboConfigModal();
+                      }}
+                      className="rounded-xl bg-[#8f3b18] py-3 font-semibold text-white"
+                    >
+                      {comboConfigModalCtx.ctx === "admin" ? "Aggiungi all'ordine" : "Aggiungi al carrello"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()
+      ) : null}
+
       {showFineServizioModal && (
         <div
-          className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-3 pt-8 pb-10"
+          className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-3 pb-4 pt-4 sm:items-center"
           role="dialog"
           aria-modal="true"
           aria-labelledby="fine-servizio-modal-title"
           onClick={chiudiModalFineServizio}
         >
           <div
-            className="w-full max-w-md rounded-3xl border border-[#ecc8b1] bg-white p-5 shadow-xl"
+            className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-[#ecc8b1] bg-white shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 id="fine-servizio-modal-title" className="text-lg font-bold text-[#3a1f12]">
-              Conferma fine servizio
-            </h3>
-            <p className="mt-3 text-sm leading-relaxed text-[#6d4331]">
-              Stai per archiviare tutti gli ordini operativi di oggi e svuotare il Kanban.
-              Gli ordini non verranno eliminati: resteranno nello storico clienti e nelle statistiche.
-              Questa azione è pensata per fine giornata/fine servizio.
-            </p>
-            <div className="mt-4 rounded-2xl bg-[#fff7f0] p-4 text-sm text-[#6d4331]">
-              <p className="font-semibold text-[#8f3b18]">Riepilogo operativo</p>
-              <ul className="mt-2 space-y-2 text-xs sm:text-sm">
-                <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
-                  <span>Ordini operativi da archiviare</span>
-                  <span className="font-semibold tabular-nums">{ordiniOperativiOggi.length}</span>
-                </li>
-                <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
-                  <span>Comande ancora da stampare</span>
-                  <span className="font-semibold tabular-nums">{comandeDaStampare}</span>
-                </li>
-                <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
-                  <span>Ordini non completati</span>
-                  <span className="font-semibold tabular-nums">{ordiniAttiviCount}</span>
-                </li>
-                <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
-                  <span>Fatturato operativo della giornata</span>
-                  <span className="font-semibold tabular-nums">{formatEuro(fatturatoDemo)}</span>
-                </li>
-                <li className="flex justify-between gap-3 pt-1">
-                  <span>Pizze (operativo di oggi)</span>
-                  <span className="font-semibold tabular-nums">{pizzeVenduteOggi}</span>
-                </li>
-              </ul>
-            </div>
-            {ordiniAttiviCount > 0 && (
-              <div className="mt-4 rounded-xl border-2 border-amber-500 bg-amber-50 p-3 text-sm font-semibold text-amber-950">
-                Attenzione: ci sono ordini non completati. Assicurati che il servizio sia davvero finito.
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5">
+              <h3 id="fine-servizio-modal-title" className="text-lg font-bold text-[#3a1f12]">
+                Conferma fine servizio
+              </h3>
+              <p className="mt-3 text-sm leading-relaxed text-[#6d4331]">
+                Stai per archiviare tutti gli ordini operativi di oggi e svuotare il Kanban.
+                Gli ordini non verranno eliminati: resteranno nello storico clienti e nelle statistiche.
+                Questa azione è pensata per fine giornata/fine servizio.
+              </p>
+              <div className="mt-4 rounded-2xl bg-[#fff7f0] p-4 text-sm text-[#6d4331]">
+                <p className="font-semibold text-[#8f3b18]">Riepilogo operativo</p>
+                <ul className="mt-2 space-y-2 text-xs sm:text-sm">
+                  <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
+                    <span>Ordini operativi da archiviare</span>
+                    <span className="font-semibold tabular-nums">{ordiniOperativiOggi.length}</span>
+                  </li>
+                  <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
+                    <span>Comande ancora da stampare</span>
+                    <span className="font-semibold tabular-nums">{comandeDaStampare}</span>
+                  </li>
+                  <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
+                    <span>Ordini non completati</span>
+                    <span className="font-semibold tabular-nums">{ordiniAttiviCount}</span>
+                  </li>
+                  <li className="flex justify-between gap-3 border-b border-[#f0d7c7] pb-2">
+                    <span>Fatturato operativo della giornata</span>
+                    <span className="font-semibold tabular-nums">{formatEuro(fatturatoDemo)}</span>
+                  </li>
+                  <li className="flex justify-between gap-3 pt-1">
+                    <span>Pizze (operativo di oggi)</span>
+                    <span className="font-semibold tabular-nums">{pizzeVenduteOggi}</span>
+                  </li>
+                </ul>
               </div>
-            )}
-            <label className="mt-4 block text-sm font-semibold text-[#3a1f12]" htmlFor="archive-reset-confirm">
-              Scrivi RESET per confermare
-              <input
-                id="archive-reset-confirm"
-                type="text"
-                autoComplete="off"
-                autoCorrect="off"
-                spellCheck={false}
-                value={archiveResetConfirmInput}
-                onChange={(e) => setArchiveResetConfirmInput(e.target.value)}
-                className="mt-2 w-full rounded-xl border border-[#ecc8b1] bg-white px-3 py-3 text-base font-mono text-[#3a1f12] outline-none ring-[#8f3b18] focus:ring-2"
-                placeholder="RESET"
-              />
-            </label>
-            <div className="mt-5 flex flex-col gap-2 sm:flex-row-reverse sm:justify-end">
-              <button
-                type="button"
-                disabled={archiveResetConfirmInput !== "RESET"}
-                onClick={eseguiArchiviazioneGiornataDopoConferma}
-                className="w-full rounded-xl bg-red-600 px-4 py-3 text-sm font-bold text-white shadow-sm ring-red-700 transition enabled:hover:bg-red-700 enabled:focus-visible:ring-2 disabled:cursor-not-allowed disabled:bg-red-300 disabled:text-red-100 sm:w-auto sm:min-w-[11rem]"
-              >
-                Conferma reset giornata
-              </button>
-              <button
-                type="button"
-                onClick={chiudiModalFineServizio}
-                className="w-full rounded-xl border border-[#d59e7d] bg-white px-4 py-3 text-sm font-semibold text-[#8f3b18] sm:w-auto"
-              >
-                Annulla
-              </button>
+              {ordiniAttiviCount > 0 && (
+                <div className="mt-4 rounded-xl border-2 border-amber-500 bg-amber-50 p-3 text-sm font-semibold text-amber-950">
+                  Attenzione: ci sono ordini non completati. Assicurati che il servizio sia davvero finito.
+                </div>
+              )}
+              <label className="mt-4 block text-sm font-semibold text-[#3a1f12]" htmlFor="archive-reset-confirm">
+                Scrivi RESET per confermare
+                <input
+                  id="archive-reset-confirm"
+                  type="text"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={archiveResetConfirmInput}
+                  onChange={(e) => setArchiveResetConfirmInput(e.target.value)}
+                  className="mt-2 w-full rounded-xl border border-[#ecc8b1] bg-white px-3 py-3 text-base font-mono text-[#3a1f12] outline-none ring-[#8f3b18] focus:ring-2"
+                  placeholder="RESET"
+                />
+              </label>
+            </div>
+            <div className="shrink-0 border-t border-[#ecd7c8] bg-white p-5 pt-3">
+              <div className="flex flex-col gap-2 sm:flex-row-reverse sm:justify-end">
+                <button
+                  type="button"
+                  disabled={archiveResetConfirmInput !== "RESET"}
+                  onClick={eseguiArchiviazioneGiornataDopoConferma}
+                  className="w-full rounded-xl bg-red-600 px-4 py-3 text-sm font-bold text-white shadow-sm ring-red-700 transition enabled:hover:bg-red-700 enabled:focus-visible:ring-2 disabled:cursor-not-allowed disabled:bg-red-300 disabled:text-red-100 sm:w-auto sm:min-w-[11rem]"
+                >
+                  Conferma reset giornata
+                </button>
+                <button
+                  type="button"
+                  onClick={chiudiModalFineServizio}
+                  className="w-full rounded-xl border border-[#d59e7d] bg-white px-4 py-3 text-sm font-semibold text-[#8f3b18] sm:w-auto"
+                >
+                  Annulla
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {adminModificaOrarioOrdineId ? (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-3 sm:items-center">
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-3 pb-4 pt-4 sm:items-center">
           <div
-            className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-4 shadow-xl sm:rounded-3xl"
+            className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-white shadow-xl sm:rounded-3xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="modal-orario-titolo"
           >
-            <h3 id="modal-orario-titolo" className="text-lg font-bold text-[#3a1f12]">
-              Modifica orario proposto
-            </h3>
-            <p className="mt-1 text-xs text-[#6d4331]">
-              Ordine <span className="font-semibold">{adminModificaOrarioOrdineId}</span> — scegli un nuovo slot
-            </p>
-            <div className="mt-4 grid max-h-52 gap-2 overflow-y-auto sm:max-h-64">
-              {generaSlotOrari().map((slot) => (
-                <button
-                  key={`modal-slot-${slot}`}
-                  type="button"
-                  onClick={() => setAdminModificaOrarioDraft(slot)}
-                  className={`rounded-xl border p-3 text-left text-sm font-semibold transition ${
-                    adminModificaOrarioDraft === slot
-                      ? "border-[#8f3b18] bg-[#f4dfd0] text-[#8f3b18]"
-                      : "border-[#ecc8b1] bg-[#fffaf6] text-[#3a1f12]"
-                  }`}
-                >
-                  {slot}
-                </button>
-              ))}
+            <div className="shrink-0 px-4 pb-2 pt-4">
+              <h3 id="modal-orario-titolo" className="text-lg font-bold text-[#3a1f12]">
+                Modifica orario proposto
+              </h3>
+              <p className="mt-1 text-xs text-[#6d4331]">
+                Ordine <span className="font-semibold">{adminModificaOrarioOrdineId}</span> — scegli un nuovo slot
+              </p>
             </div>
-            <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={chiudiModificaOrarioAdmin}
-                className="rounded-xl border border-[#d59e7d] bg-white py-3 text-sm font-semibold text-[#8f3b18]"
-              >
-                Annulla
-              </button>
-              <button
-                type="button"
-                onClick={salvaModificaOrarioAdmin}
-                className="rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white"
-              >
-                Salva nuovo orario
-              </button>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4">
+              <div className="grid gap-2 pb-2">
+                {generaSlotOrari().map((slot) => (
+                  <button
+                    key={`modal-slot-${slot}`}
+                    type="button"
+                    onClick={() => setAdminModificaOrarioDraft(slot)}
+                    className={`rounded-xl border p-3 text-left text-sm font-semibold transition ${
+                      adminModificaOrarioDraft === slot
+                        ? "border-[#8f3b18] bg-[#f4dfd0] text-[#8f3b18]"
+                        : "border-[#ecc8b1] bg-[#fffaf6] text-[#3a1f12]"
+                    }`}
+                  >
+                    {slot}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="shrink-0 border-t border-[#ecd7c8] bg-white px-4 pb-4 pt-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={chiudiModificaOrarioAdmin}
+                  className="rounded-xl border border-[#d59e7d] bg-white py-3 text-sm font-semibold text-[#8f3b18]"
+                >
+                  Annulla
+                </button>
+                <button
+                  type="button"
+                  onClick={salvaModificaOrarioAdmin}
+                  className="rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white"
+                >
+                  Salva nuovo orario
+                </button>
+              </div>
             </div>
           </div>
         </div>
       ) : null}
 
       {showPrintPreview && (
-        <div className="fixed inset-0 z-30 bg-black/40 p-3">
-          <div className="mx-auto mt-10 max-w-md rounded-3xl bg-white p-4">
-            <h3 className="text-lg font-bold">Anteprima comanda</h3>
-            <p className="mt-1 text-xs text-[#6d4331]">Comande selezionate: {printPreviewOrders.length}</p>
-            <div className="mt-3 max-h-80 space-y-2 overflow-y-auto">
-              {printPreviewOrders.map((ordine) => (
-                <div key={`preview-${ordine.id}`} className="rounded-xl bg-[#fff7f0] p-3 text-xs text-[#6d4331]">
-                  <p className="font-semibold text-[#3a1f12]">{ordine.id}</p>
-                  <p>{ordine.clienteNome} - {ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}</p>
-                  <p>
-                    Totale pizze: <span className="font-semibold">{contaPizzeOrdine(ordine.righe)}</span>
-                    {" · "}
-                    Righe: <span className="font-semibold">{ordine.righe.length}</span>
-                  </p>
-                  <p>Orario: {ordine.orarioScelto}</p>
-                  <p>Prodotti: {ordine.righe.map((r) => `${r.quantita}x ${r.nome}`).join(", ")}</p>
-                </div>
-              ))}
+        <div className="fixed inset-0 z-30 flex items-end justify-center bg-black/40 p-3 pb-4 pt-4 sm:items-center">
+          <div
+            className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="anteprima-comanda-title"
+          >
+            <div className="shrink-0 border-b border-[#ecd7c8] px-4 pb-3 pt-4">
+              <h3 id="anteprima-comanda-title" className="text-lg font-bold">
+                Anteprima comanda
+              </h3>
+              <p className="mt-1 text-xs text-[#6d4331]">Comande selezionate: {printPreviewOrders.length}</p>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <button onClick={stampaComandeAnteprima} className="rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white">Stampa</button>
-              <button onClick={() => setShowPrintPreview(false)} className="rounded-xl border border-[#d59e7d] py-3 text-sm font-semibold text-[#8f3b18]">Chiudi</button>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
+              <div className="space-y-2">
+                {printPreviewOrders.map((ordine) => (
+                  <div key={`preview-${ordine.id}`} className="rounded-xl bg-[#fff7f0] p-3 text-xs text-[#6d4331]">
+                    <p className="font-semibold text-[#3a1f12]">{ordine.id}</p>
+                    <p>
+                      {ordine.clienteNome} - {ordine.tipoOrdine === "ritiro" ? "RITIRO" : "CONSEGNA"}
+                    </p>
+                    <p>
+                      Totale pizze: <span className="font-semibold">{contaPizzeOrdine(ordine.righe)}</span>
+                      {" · "}
+                      Righe: <span className="font-semibold">{ordine.righe.length}</span>
+                    </p>
+                    <p>Orario: {ordine.orarioScelto}</p>
+                    <p>
+                      Prodotti:{" "}
+                      {ordine.righe
+                        .map((r) => `${r.quantita}x ${r.nome}${r.impastoNome ? ` [${r.impastoNome}]` : ""}`)
+                        .join(", ")}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="shrink-0 border-t border-[#ecd7c8] bg-white px-4 pb-4 pt-3">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={stampaComandeAnteprima}
+                  className="rounded-xl bg-[#8f3b18] py-3 text-sm font-semibold text-white"
+                >
+                  Stampa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPrintPreview(false)}
+                  className="rounded-xl border border-[#d59e7d] py-3 text-sm font-semibold text-[#8f3b18]"
+                >
+                  Chiudi
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -4912,6 +6962,80 @@ function MetricCard({ titolo, valore }: { titolo: string; valore: string }) {
 }
 
 function ComandaPrintView({ ordine }: { ordine: Ordine }) {
+  const group = (categoria: MenuCategoria) =>
+    ordine.righe.filter((riga) => (riga.categoria ?? "pizze") === categoria);
+  const pizze = group("pizze");
+  const bevandeRows = group("bevande");
+  const dolciRows = group("dolci");
+  const comboRows = group("combo");
+  const renderRow = (riga: RigaCarrello) => {
+    if (riga.categoria === "combo" && riga.comboDettaglio) {
+      const d = riga.comboDettaglio;
+      return (
+        <div key={`print-row-${ordine.id}-${riga.id}`} style={{ marginBottom: 12 }}>
+          <p style={{ fontWeight: 700 }}>
+            {riga.quantita}x {riga.nome} — {formatEuro(getRigaPrezzoUnitario(riga))} cad.
+          </p>
+          {d.kind === "pizza-bibita" && (
+            <>
+              <p style={{ fontWeight: 600 }}>COMBO PIZZA + BIBITA</p>
+              <p>
+                Pizza: {d.pizzaNome}
+                {d.impastoNome ? ` · Impasto: ${d.impastoNome}` : ""}
+              </p>
+              {d.extra.length > 0 ? <p>Extra: {d.extra.join(", ")}</p> : null}
+              {d.notePizza ? <p>Note pizza: {d.notePizza}</p> : null}
+              <p>Bibita: {d.bibitaNome}</p>
+              <p>Sconto combo: -{formatEuro(d.scontoCombo)}</p>
+            </>
+          )}
+          {d.kind === "famiglia" && (
+            <>
+              <p style={{ fontWeight: 600 }}>COMBO FAMIGLIA</p>
+              {d.pizze.map((p, i) => (
+                <p key={`pf-${riga.id}-${i}`}>
+                  Pizza {i + 1}: {p.nome}
+                  {p.note ? ` — ${p.note}` : ""}
+                </p>
+              ))}
+              <p>Bibite: {formatBibiteFamigliaElenco(d.bibite)}</p>
+              <p>Prezzo fisso combo: {formatEuro(d.prezzoFisso)}</p>
+            </>
+          )}
+          {d.kind === "dolce" && (
+            <>
+              <p style={{ fontWeight: 600 }}>COMBO DOLCE</p>
+              <p>
+                Pizza: {d.pizzaNome}
+                {d.impastoNome ? ` · Impasto: ${d.impastoNome}` : ""}
+              </p>
+              {d.extra.length > 0 ? <p>Extra: {d.extra.join(", ")}</p> : null}
+              {d.notePizza ? <p>Note pizza: {d.notePizza}</p> : null}
+              <p>Dolce: {d.dolceNome}</p>
+              <p>Sconto combo: -{formatEuro(d.scontoCombo)}</p>
+            </>
+          )}
+        </div>
+      );
+    }
+    return (
+      <div key={`print-row-${ordine.id}-${riga.id}`} style={{ marginBottom: 8 }}>
+        <p>
+          {riga.quantita}x {riga.nome} ({formatEuro(getRigaPrezzoUnitario(riga))})
+        </p>
+        {riga.impastoNome ? (
+          <p>
+            Impasto: {riga.impastoNome}
+            {riga.impastoPrezzoExtra ? ` (+${formatEuro(riga.impastoPrezzoExtra)})` : ""}
+          </p>
+        ) : null}
+        {riga.extra.length > 0 && <p>Extra: {riga.extra.join(", ")}</p>}
+        {riga.ingredientiRimossi && riga.ingredientiRimossi.length > 0 && <p>Senza: {riga.ingredientiRimossi.join(", ")}</p>}
+        {riga.note && <p>Note prodotto: {riga.note}</p>}
+      </div>
+    );
+  };
+
   return (
     <article className="comanda-print">
       <h1 style={{ fontWeight: 700 }}>PIZZAFLOW</h1>
@@ -4937,14 +7061,30 @@ function ComandaPrintView({ ordine }: { ordine: Ordine }) {
         </>
       )}
       <hr />
-      {ordine.righe.map((riga) => (
-        <div key={`print-row-${ordine.id}-${riga.id}`} style={{ marginBottom: 8 }}>
-          <p>{riga.quantita}x {riga.nome} ({formatEuro(riga.basePrezzo)})</p>
-          {riga.extra.length > 0 && <p>Extra: {riga.extra.join(", ")}</p>}
-          {riga.ingredientiRimossi && riga.ingredientiRimossi.length > 0 && <p>Senza: {riga.ingredientiRimossi.join(", ")}</p>}
-          {riga.note && <p>Note pizza: {riga.note}</p>}
-        </div>
-      ))}
+      {pizze.length > 0 && (
+        <>
+          <p style={{ fontWeight: 700 }}>PIZZE</p>
+          {pizze.map(renderRow)}
+        </>
+      )}
+      {bevandeRows.length > 0 && (
+        <>
+          <p style={{ fontWeight: 700 }}>BEVANDE</p>
+          {bevandeRows.map(renderRow)}
+        </>
+      )}
+      {dolciRows.length > 0 && (
+        <>
+          <p style={{ fontWeight: 700 }}>DOLCI</p>
+          {dolciRows.map(renderRow)}
+        </>
+      )}
+      {comboRows.length > 0 && (
+        <>
+          <p style={{ fontWeight: 700 }}>COMBO</p>
+          {comboRows.map(renderRow)}
+        </>
+      )}
       <hr />
       <p>Pagamento: {getPaymentMethodLabel(ordine.paymentMethod)}</p>
       <p>Stato pagamento: {getPaymentStatusLabel(ordine.paymentStatus)}</p>
